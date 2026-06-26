@@ -58,10 +58,11 @@ safely. Filament turns the whole config into a legible, editable dashboard.
 
 ## Install / build
 
-**Prebuilt downloads:** CI builds a macOS app bundle and a Linux tarball in
-separate per-OS pipelines on every push to `main` (available as workflow
-artifacts) and attaches them to the GitHub Release for any `v*` tag. The macOS
-`.app` is unsigned, so the first launch needs a right-click → **Open**.
+**Prebuilt downloads:** pushing a `vX.Y.Z` tag runs two separate per-OS release
+pipelines that publish a macOS `Filament.app` and a Linux tarball to the matching
+GitHub Release. (CI also builds release binaries on every push across all three
+OSes as a check.) The macOS `.app` is unsigned, so the first launch needs a
+right-click → **Open**.
 
 **From source** — requires Rust 1.94+ (pinned via `rust-toolchain.toml`).
 

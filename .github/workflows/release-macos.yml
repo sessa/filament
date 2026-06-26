@@ -1,12 +1,11 @@
 name: Release (macOS)
 
-# macOS build pipeline. Bundles a `Filament.app` on every push to main (as a
-# workflow artifact) and attaches it to the GitHub Release when a `v*` tag is
-# pushed. The app is unsigned — Gatekeeper will require a right-click → Open on
+# macOS build pipeline. Publishes a `Filament.app` zip to the GitHub Release when
+# a `v*` tag is pushed; manual runs (workflow_dispatch) upload it as a workflow
+# artifact. The app is unsigned — Gatekeeper will require a right-click → Open on
 # first launch (code signing needs Apple Developer secrets, not configured here).
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -38,13 +37,19 @@ jobs:
           ditto -c -k --keepParent "$app" filament-macos-arm64.zip
           ls -la filament-macos-arm64.zip
 
+      # On main pushes: best-effort artifact (won't red the build if the Actions
+      # artifact storage quota is full).
       - name: Upload build artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: filament-macos-arm64
           path: filament-macos-arm64.zip
           if-no-files-found: error
+          retention-days: 14
 
+      # On v* tags: publish to a GitHub Release (separate from the artifact quota).
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

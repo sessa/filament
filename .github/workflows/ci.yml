@@ -45,14 +45,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo build --release -p filament
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: filament-${{ matrix.os }}
-          path: |
-            target/release/filament
-            target/release/filament.exe
-          if-no-files-found: ignore
+      # Distributable binaries are produced by the per-OS release pipelines, not
+      # here, to avoid filling the Actions artifact storage quota on every run.
 
   deny:
     name: cargo-deny
