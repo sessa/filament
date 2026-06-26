@@ -14,6 +14,7 @@ mod inspector;
 mod search;
 mod sidebar;
 mod theme;
+mod watcher;
 mod widgets;
 mod wizard;
 
@@ -23,6 +24,7 @@ fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .theme(App::theme)
+        .subscription(App::subscription)
         .window_size((1200.0, 780.0))
         .antialiasing(true)
         .run()

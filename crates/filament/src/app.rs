@@ -3,13 +3,13 @@
 use std::collections::HashMap;
 
 use iced::widget::{column, container, markdown, row, rule, scrollable, space, text, text_editor};
-use iced::{Center, Element, Fill, Length, Padding, Task, Theme};
+use iced::{Center, Element, Fill, Length, Padding, Subscription, Task, Theme};
 
 use filament_core::{Entry, ItemId, ItemKind, Workspace};
 
 use crate::cli::Cli;
 use crate::theme as th;
-use crate::{editor, inspector, sidebar, widgets, wizard};
+use crate::{editor, inspector, sidebar, watcher, widgets, wizard};
 
 /// What the right-hand pane is doing. The editor states are boxed because they
 /// are much larger than the unit `Inspect` variant.
@@ -45,6 +45,7 @@ pub enum Message {
     SetKindFilter(Option<ItemKind>),
     ToggleTheme,
     Rescan,
+    FsChanged,
 
     // editing
     EnterEditAgent,
@@ -127,6 +128,44 @@ impl App {
         }
     }
 
+    /// Watch the config locations so external edits refresh the UI live.
+    pub fn subscription(&self) -> Subscription<Message> {
+        watcher::subscription(self.watch_roots())
+    }
+
+    fn watch_roots(&self) -> Vec<std::path::PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(ws) = &self.workspace.options.workspace {
+            let claude = ws.join(".claude");
+            if claude.is_dir() {
+                roots.push(claude);
+            }
+            let mcp = ws.join(".mcp.json");
+            if mcp.is_file() {
+                roots.push(mcp);
+            }
+        }
+        if let Some(home) = self.workspace.options.home_dir() {
+            let claude = home.join(".claude");
+            if claude.is_dir() {
+                roots.push(claude);
+            }
+        }
+        roots
+    }
+
+    /// Re-read the catalog, dropping a selection that no longer exists.
+    fn rescan(&mut self) {
+        self.workspace.rescan();
+        self.previews.clear();
+        if let Some(id) = &self.selection {
+            if self.workspace.catalog.get(id).is_none() {
+                self.selection = None;
+            }
+        }
+        self.ensure_preview();
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Select(id) => {
@@ -142,16 +181,7 @@ impl App {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => self.dark = !self.dark,
-            Message::Rescan => {
-                self.workspace.rescan();
-                self.previews.clear();
-                if let Some(id) = &self.selection {
-                    if self.workspace.catalog.get(id).is_none() {
-                        self.selection = None;
-                    }
-                }
-                self.ensure_preview();
-            }
+            Message::Rescan | Message::FsChanged => self.rescan(),
 
             Message::EnterEditAgent => {
                 let st = self.selected_entry().and_then(editor::AgentEdit::new);
