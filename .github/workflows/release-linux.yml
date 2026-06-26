@@ -1,0 +1,55 @@
+name: Release (Linux)
+
+# Linux build pipeline. Produces a tarball on every push to main (as a workflow
+# artifact) and attaches it to the GitHub Release when a `v*` tag is pushed.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GUI dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libfontconfig1-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release -p filament
+
+      - name: Package tarball
+        run: |
+          stage="filament-linux-x86_64"
+          mkdir -p "dist/$stage"
+          cp target/release/filament "dist/$stage/"
+          cp README.md LICENSE "dist/$stage/"
+          tar -C dist -czf "$stage.tar.gz" "$stage"
+          ls -la "$stage.tar.gz"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: filament-linux-x86_64
+          path: filament-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: filament-linux-x86_64.tar.gz

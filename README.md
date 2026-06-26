@@ -58,7 +58,12 @@ safely. Filament turns the whole config into a legible, editable dashboard.
 
 ## Install / build
 
-Requires Rust 1.94+ (pinned via `rust-toolchain.toml`).
+**Prebuilt downloads:** CI builds a macOS app bundle and a Linux tarball in
+separate per-OS pipelines on every push to `main` (available as workflow
+artifacts) and attaches them to the GitHub Release for any `v*` tag. The macOS
+`.app` is unsigned, so the first launch needs a right-click → **Open**.
+
+**From source** — requires Rust 1.94+ (pinned via `rust-toolchain.toml`).
 
 ```sh
 cargo build --release -p filament
