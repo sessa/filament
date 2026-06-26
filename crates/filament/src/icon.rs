@@ -31,6 +31,20 @@ pub const MOON: char = '\u{e330}';
 pub const CLOSE: char = '\u{e4f6}'; // x
 pub const SAVE: char = '\u{e710}'; // files
 
+// Sessions (crow-style worktree workflow)
+pub const SESSIONS: char = '\u{eb54}'; // kanban
+pub const CONFIG: char = '\u{e466}'; // stack
+pub const BRANCH: char = '\u{e278}'; // git-branch
+pub const PR: char = '\u{e282}'; // git-pull-request
+pub const ISSUE: char = '\u{e602}'; // circle-dashed
+pub const CHECK_OK: char = '\u{e184}'; // check-circle
+pub const CHECK_FAIL: char = '\u{e4f8}'; // x-circle
+pub const CLOCK: char = '\u{e19a}'; // clock
+pub const TRASH: char = '\u{e4a6}'; // trash
+pub const LINK: char = '\u{e5de}'; // arrow-square-out
+pub const FOLDER_OPEN: char = '\u{e256}'; // folder-open
+pub const ROCKET: char = '\u{e3fc}'; // rocket
+
 // Status / scope
 pub const WARNING: char = '\u{e4e0}'; // warning
 pub const PROJECT: char = '\u{e24a}'; // folder

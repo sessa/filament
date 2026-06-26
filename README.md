@@ -40,6 +40,10 @@ safely. Filament turns the whole config into a legible, editable dashboard.
   verbatim. Writes are atomic.
 - **Creation wizard** — scaffold a new agent, skill, or command into the scope of
   your choice from a template.
+- **Sessions** — a crow-inspired worktree workflow: pair a git **worktree** with a
+  Claude Code instance (and an optional GitHub issue / PR) per task, see them on a
+  Working → In Review → Done board, and launch `claude` in the worktree with one
+  click. (See [Sessions](#sessions--worktree-workflow) below.)
 - **Integrated terminal** — an embedded terminal panel (Alacritty engine via
   `iced_term`) so you can run `claude` for the selected agent (the **Run**
   button) or any command, without leaving the app. *(Ghostty itself can't be
@@ -55,6 +59,39 @@ safely. Filament turns the whole config into a legible, editable dashboard.
 | ![Agent editor](docs/screenshot-editor.png) | ![Settings](docs/screenshot-settings.png) |
 
 ![Integrated terminal](docs/screenshot-terminal.png)
+
+## Sessions — worktree workflow
+
+The **Sessions** section (toggle it in the header) brings the core idea of
+[radiusmethod/crow](https://github.com/radiusmethod/crow) into Filament: instead
+of juggling branches in one checkout, you spin up an isolated **git worktree** per
+task and run Claude Code in it.
+
+![Sessions board](docs/screenshot-sessions.png)
+
+- **New session** — give it a title and/or a GitHub issue URL and pick a base
+  branch. Filament creates a worktree on a fresh branch (in a sibling
+  `<repo>-worktrees/` directory) and registers the session.
+- **Board** — sessions are grouped **Working → In Review → Done**. The state is
+  derived from the linked PR (open ⇒ In Review, merged ⇒ Done) and issue (closed
+  ⇒ Done) when GitHub data is available.
+- **Run Claude / Shell** — launch `claude` (or a plain shell) in the session's
+  worktree, right in the embedded terminal — no `cd` dance.
+- **Tickets** — open GitHub issues without a session show up as tickets; "Start
+  working" turns one into a session in a click.
+- **PR & CI status** — **Refresh** polls GitHub for each session's pull request:
+  draft / review decision and a roll-up of CI checks (passing / pending /
+  failing).
+- **Orphan recovery** — worktrees created outside Filament are detected on load
+  and can be **adopted** as sessions.
+- **Safe deletion** — removing a session deletes its worktree, except when it's on
+  a protected (base/default) branch, which is preserved.
+
+GitHub features use the [`gh`](https://cli.github.com) CLI and are entirely
+optional: when `gh` is missing or unauthenticated, sessions, worktrees, and the
+terminal still work — only issue/PR data is unavailable, surfaced as a quiet hint.
+Worktree management uses your installed `git` (no libgit2). Session metadata is
+stored in your OS data directory, not in the repo.
 
 ## Install / build
 
@@ -84,7 +121,7 @@ libwayland-dev libfontconfig1-dev`.)
 
 ```text
 filament [PATH | --workspace <dir>] [--home <dir>] [--no-user]
-         [--select <name>] [--search <query>]
+         [--select <name>] [--search <query>] [--sessions]
 ```
 
 - `--workspace <dir>` (or a bare path): the project to scan. Filament walks up to
@@ -94,6 +131,7 @@ filament [PATH | --workspace <dir>] [--home <dir>] [--no-user]
   `~/.claude`).
 - `--no-user`: project scope only.
 - `--select` / `--search`: deep-link to an item or prefill the search box.
+- `--sessions`: open straight into the Sessions section.
 
 Try it against the bundled fixtures:
 
@@ -110,9 +148,12 @@ A Cargo workspace with two crates:
 - **`filament-core`** — UI-free engine: the domain model, a byte-span frontmatter
   splitter, per-file parsers (errors captured as diagnostics, never panics),
   discovery + scope/precedence resolution, validation, and lossless edit / atomic
-  write primitives. Fully unit-tested.
+  write primitives. Also the session engine — a `git` worktree wrapper, the
+  `session` model + JSON store, and `github` (`gh`-backed, gracefully degrading)
+  integration. Fully unit-tested.
 - **`filament`** — the Iced desktop app: sidebar, inspector, editor, wizard,
-  theming, fuzzy search, and the file-watch subscription.
+  theming, fuzzy search, the file-watch subscription, the embedded terminal, and
+  the Sessions board.
 
 The split keeps all parsing/editing logic fast to compile and testable headlessly.
 

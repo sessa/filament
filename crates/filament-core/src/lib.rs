@@ -14,13 +14,18 @@ pub mod discovery;
 pub mod edit;
 pub mod error;
 pub mod frontmatter;
+pub mod git;
+pub mod github;
 pub mod model;
 pub mod parse;
 pub mod scope;
+pub mod session;
 pub mod validate;
 pub mod workspace;
 
 pub use error::{CoreError, ParseError};
+pub use git::{GitError, Worktree};
+pub use github::GhError;
 pub use model::{
     parse_hooks, Agent, AgentColor, AgentFrontmatter, Catalog, CommandFrontmatter, Effort, Entry,
     HookCommand, HookEventGroup, HookMatcher, Isolation, ItemId, ItemKind, McpServer, McpTransport,
@@ -28,5 +33,8 @@ pub use model::{
     ToolList, ToolSpec,
 };
 pub use scope::Scope;
+pub use session::{
+    CheckState, CheckSummary, IssueRef, NewSession, PrRef, Session, SessionState, SessionStore,
+};
 pub use validate::{validate_agent, validate_skill, ValidationReport};
 pub use workspace::{DiscoveryOptions, Workspace};

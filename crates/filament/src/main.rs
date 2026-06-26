@@ -13,6 +13,7 @@ mod editor;
 mod icon;
 mod inspector;
 mod search;
+mod sessions;
 mod sidebar;
 mod terminal;
 mod theme;

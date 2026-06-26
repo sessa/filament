@@ -26,6 +26,8 @@ pub struct Cli {
     pub start_wizard: bool,
     /// Open the integrated terminal on launch (testing/screenshots).
     pub start_terminal: bool,
+    /// Start in the Sessions section (testing/screenshots).
+    pub start_sessions: bool,
 }
 
 impl Cli {
@@ -38,6 +40,7 @@ impl Cli {
         let mut start_edit = false;
         let mut start_wizard = false;
         let mut start_terminal = false;
+        let mut start_sessions = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -49,6 +52,7 @@ impl Cli {
                 "--edit" => start_edit = true,
                 "--wizard" => start_wizard = true,
                 "--terminal" => start_terminal = true,
+                "--sessions" => start_sessions = true,
                 "--no-user" => include_user = false,
                 other if !other.starts_with('-') && workspace.is_none() => {
                     workspace = Some(PathBuf::from(other));
@@ -70,6 +74,7 @@ impl Cli {
             start_edit,
             start_wizard,
             start_terminal,
+            start_sessions,
         }
     }
 
