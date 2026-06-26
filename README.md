@@ -6,7 +6,13 @@ place, with the correct metadata, iconography, and scope/precedence made visible
 
 Written in **pure Rust** ([Iced](https://iced.rs)), no web stack.
 
+A polished, native-feeling desktop app: a translucent **"glass" UI** (with real
+backdrop blur where the OS supports it — macOS vibrancy, KDE/Wayland), [Phosphor]
+icons throughout, and bundled **Inter** + **JetBrains Mono** fonts.
+
 ![Filament viewing an agent](docs/screenshot-viewer.png)
+
+[Phosphor]: https://phosphoricons.com
 
 ## Why
 
@@ -119,3 +125,6 @@ macOS, Windows, and Linux, plus `cargo-deny`.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Bundled fonts retain their own licenses: **Inter** and **JetBrains Mono** under
+the SIL Open Font License 1.1, and **Phosphor** icons under MIT.

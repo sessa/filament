@@ -1,9 +1,13 @@
-//! Color/icon helpers shared by the views. Kept small in M2; palettes and the
-//! icon font arrive in M4.
+//! Color, surface, and shadow helpers for the "glass" look.
+//!
+//! Surfaces are intentionally translucent so that, on platforms where the window
+//! is transparent + blurred (macOS vibrancy, KDE/Wayland blur), the desktop
+//! shows through as a frosted backdrop. Elsewhere they read as tasteful
+//! translucent panels over the app background.
 
-use iced::{Color, Theme};
+use iced::{Color, Shadow, Theme, Vector};
 
-use filament_core::{AgentColor, ItemKind, Scope};
+use filament_core::{AgentColor, Scope};
 
 /// Map an agent's declared color to an sRGB value.
 pub fn agent_color(c: AgentColor) -> Color {
@@ -21,18 +25,6 @@ pub fn scope_accent(scope: Scope) -> Color {
     }
 }
 
-/// A placeholder glyph per item kind (replaced by an icon font in M4).
-pub fn kind_glyph(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Agent => "◆",
-        ItemKind::Skill => "✦",
-        ItemKind::Command => "⌘",
-        ItemKind::McpServer => "⇄",
-        ItemKind::Settings => "⚙",
-    }
-}
-
-/// A red used for error badges.
 pub fn danger() -> Color {
     Color::from_rgb8(0xE5, 0x48, 0x4D)
 }
@@ -42,17 +34,62 @@ pub fn with_alpha(mut c: Color, a: f32) -> Color {
     c
 }
 
-/// Secondary/muted text color for the current theme.
+fn is_dark(theme: &Theme) -> bool {
+    theme.extended_palette().is_dark
+}
+
+/// Translucent app background (painted by the application style). Low alpha lets
+/// OS blur show through.
+pub fn app_background(theme: &Theme) -> Color {
+    if is_dark(theme) {
+        Color::from_rgba(0.055, 0.065, 0.095, 0.82)
+    } else {
+        Color::from_rgba(0.96, 0.97, 0.99, 0.86)
+    }
+}
+
+/// Secondary/muted text color.
 pub fn muted(theme: &Theme) -> Color {
     with_alpha(theme.palette().text, 0.55)
 }
 
-/// A subtle raised-surface color for cards.
+/// A faint translucent fill for cards.
 pub fn surface(theme: &Theme) -> Color {
-    theme.extended_palette().background.weak.color
+    if is_dark(theme) {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.05)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.035)
+    }
+}
+
+/// A slightly stronger fill for raised chrome (header, panels, inputs).
+pub fn surface_strong(theme: &Theme) -> Color {
+    if is_dark(theme) {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.08)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.05)
+    }
 }
 
 /// A hairline border color.
 pub fn hairline(theme: &Theme) -> Color {
     with_alpha(theme.palette().text, 0.10)
+}
+
+/// Soft drop shadow for cards.
+pub fn card_shadow() -> Shadow {
+    Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.28),
+        offset: Vector::new(0.0, 6.0),
+        blur_radius: 22.0,
+    }
+}
+
+/// Subtle shadow for small raised elements.
+pub fn soft_shadow() -> Shadow {
+    Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.18),
+        offset: Vector::new(0.0, 2.0),
+        blur_radius: 8.0,
+    }
 }

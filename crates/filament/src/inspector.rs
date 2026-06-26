@@ -11,6 +11,7 @@ use filament_core::{
 };
 
 use crate::app::Message;
+use crate::icon;
 use crate::theme as th;
 use crate::widgets;
 
@@ -49,18 +50,21 @@ fn header<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
 
     let mut right = row![].spacing(6).align_y(Center);
     if matches!(entry.payload, Payload::Agent(_)) {
-        right = right.push(widgets::secondary_button(
+        right = right.push(widgets::icon_button(
+            icon::RUN,
             "Run",
             Message::RunSelectedAgent,
             theme,
         ));
-        right = right.push(widgets::secondary_button(
+        right = right.push(widgets::icon_button(
+            icon::EDIT,
             "Edit",
             Message::EnterEditAgent,
             theme,
         ));
     }
-    right = right.push(widgets::secondary_button(
+    right = right.push(widgets::icon_button(
+        icon::SOURCE,
         "Source",
         Message::EnterEditSource,
         theme,

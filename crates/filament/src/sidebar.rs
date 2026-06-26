@@ -1,6 +1,6 @@
 //! The left navigation pane: a search box, kind filter chips, and every config
-//! item grouped by kind with scope chips, color swatches, and error/shadow
-//! indicators.
+//! item grouped by kind with icons, scope chips, color swatches, and
+//! error/shadow indicators.
 
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
 use iced::{border, Background, Center, Color, Element, Fill, Padding, Shadow, Theme};
@@ -8,6 +8,7 @@ use iced::{border, Background, Center, Color, Element, Fill, Padding, Shadow, Th
 use filament_core::{Catalog, Entry, ItemId, ItemKind};
 
 use crate::app::Message;
+use crate::icon;
 use crate::search;
 use crate::theme as th;
 use crate::widgets;
@@ -19,13 +20,13 @@ pub fn view<'a>(
     query: &'a str,
     kind_filter: Option<ItemKind>,
 ) -> Element<'a, Message> {
-    let top = column![search_bar(query), filters(kind_filter, theme)]
-        .spacing(8)
+    let top = column![search_bar(query, theme), filters(kind_filter, theme)]
+        .spacing(10)
         .padding(Padding {
-            top: 10.0,
-            right: 8.0,
+            top: 12.0,
+            right: 10.0,
             bottom: 8.0,
-            left: 8.0,
+            left: 10.0,
         });
 
     let list = scrollable(
@@ -41,12 +42,21 @@ pub fn view<'a>(
     column![top, list].height(Fill).into()
 }
 
-fn search_bar<'a>(query: &'a str) -> Element<'a, Message> {
-    text_input("Search…", query)
-        .on_input(Message::SearchChanged)
-        .size(13)
-        .padding(8)
-        .into()
+fn search_bar<'a>(query: &'a str, theme: &Theme) -> Element<'a, Message> {
+    let muted = th::muted(theme);
+    row![
+        icon::icon(icon::SEARCH)
+            .size(13)
+            .style(move |_: &Theme| text::Style { color: Some(muted) }),
+        text_input("Search…", query)
+            .on_input(Message::SearchChanged)
+            .size(13)
+            .padding(7)
+            .width(Fill),
+    ]
+    .spacing(8)
+    .align_y(Center)
+    .into()
 }
 
 fn filters<'a>(active: Option<ItemKind>, theme: &Theme) -> Element<'a, Message> {
@@ -89,15 +99,15 @@ fn filter_chip<'a>(
     button(text(label).size(12))
         .padding(Padding {
             top: 4.0,
-            right: 10.0,
+            right: 11.0,
             bottom: 4.0,
-            left: 10.0,
+            left: 11.0,
         })
         .on_press(msg)
         .style(move |_t, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let (bg, fg) = if active {
-                (th::with_alpha(primary, 0.25), txt)
+                (th::with_alpha(primary, 0.28), txt)
             } else if hovered {
                 (th::with_alpha(txt, 0.10), txt)
             } else {
@@ -168,24 +178,24 @@ fn build_list<'a>(
 
 fn group_header<'a>(kind: ItemKind, count: usize, muted: Color) -> Element<'a, Message> {
     row![
-        text(format!(
-            "{}  {}",
-            th::kind_glyph(kind),
-            kind.plural().to_uppercase()
-        ))
-        .size(11)
-        .style(move |_| text::Style { color: Some(muted) }),
+        icon::icon(icon::kind(kind))
+            .size(12)
+            .style(move |_: &Theme| text::Style { color: Some(muted) }),
+        text(kind.plural().to_uppercase())
+            .size(11)
+            .style(move |_| text::Style { color: Some(muted) }),
         space().width(Fill),
         text(count.to_string())
             .size(11)
             .style(move |_| text::Style { color: Some(muted) }),
     ]
     .align_y(Center)
+    .spacing(7)
     .padding(Padding {
-        top: 8.0,
+        top: 10.0,
         right: 6.0,
-        bottom: 2.0,
-        left: 6.0,
+        bottom: 4.0,
+        left: 8.0,
     })
     .into()
 }
@@ -198,10 +208,22 @@ fn entry_row<'a>(entry: &'a Entry, selected: bool, theme: &Theme) -> Element<'a,
     } else {
         base_text
     };
-    let selected_bg = th::with_alpha(theme.palette().primary, 0.20);
+    let accent = theme.palette().primary;
+    let indicator = if selected { accent } else { Color::TRANSPARENT };
+    let selected_bg = th::with_alpha(accent, 0.18);
     let hover_bg = th::with_alpha(base_text, 0.06);
 
-    let mut line = row![].spacing(8).align_y(Center).width(Fill);
+    let mut line = row![container(space().width(3.0).height(18.0)).style(move |_| {
+        container::Style {
+            background: Some(Background::Color(indicator)),
+            border: border::rounded(2),
+            ..container::Style::default()
+        }
+    })]
+    .spacing(8)
+    .align_y(Center)
+    .width(Fill);
+
     if let Some(c) = entry.color() {
         line = line.push(widgets::swatch(th::agent_color(c), 9.0));
     }
@@ -231,7 +253,7 @@ fn entry_row<'a>(entry: &'a Entry, selected: bool, theme: &Theme) -> Element<'a,
             top: 7.0,
             right: 8.0,
             bottom: 7.0,
-            left: 8.0,
+            left: 5.0,
         })
         .on_press(Message::Select(entry.id.clone()))
         .style(move |_theme, status| {
@@ -246,7 +268,7 @@ fn entry_row<'a>(entry: &'a Entry, selected: bool, theme: &Theme) -> Element<'a,
             button::Style {
                 background,
                 text_color: name_color,
-                border: border::rounded(7),
+                border: border::rounded(8),
                 shadow: Shadow::default(),
                 snap: true,
             }

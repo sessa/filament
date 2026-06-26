@@ -3,13 +3,13 @@
 use std::collections::HashMap;
 
 use iced::widget::{column, container, markdown, row, rule, scrollable, space, text, text_editor};
-use iced::{Center, Element, Fill, Length, Padding, Subscription, Task, Theme};
+use iced::{Background, Border, Center, Element, Fill, Length, Padding, Subscription, Task, Theme};
 
 use filament_core::{Entry, ItemId, ItemKind, Workspace};
 
 use crate::cli::Cli;
 use crate::theme as th;
-use crate::{editor, inspector, sidebar, terminal, watcher, widgets, wizard};
+use crate::{editor, icon, inspector, sidebar, terminal, watcher, widgets, wizard};
 
 /// What the right-hand pane is doing. The editor states are boxed because they
 /// are much larger than the unit `Inspect` variant.
@@ -141,6 +141,14 @@ impl App {
             Theme::TokyoNight
         } else {
             Theme::Light
+        }
+    }
+
+    /// The root window background — translucent so OS blur shows through.
+    pub fn app_style(&self, theme: &Theme) -> iced::theme::Style {
+        iced::theme::Style {
+            background_color: th::app_background(theme),
+            text_color: theme.palette().text,
         }
     }
 
@@ -362,40 +370,108 @@ impl App {
                 .into(),
         };
 
-        // Right pane: the detail/editor, with the terminal docked below it.
-        let mut right_pane = column![container(detail).width(Fill).height(Fill)].height(Fill);
-        if self.terminal_open {
+        // Right pane: the detail/editor in a glass panel, terminal docked below.
+        let detail_panel = container(detail)
+            .width(Fill)
+            .height(Length::FillPortion(3))
+            .clip(true)
+            .style(widgets::panel(&theme));
+
+        let right_pane: Element<Message> = if self.terminal_open {
             if let Some(term) = &self.terminal {
-                right_pane = right_pane.push(rule::horizontal(1)).push(
-                    container(iced_term::TerminalView::show(term).map(Message::Terminal))
-                        .width(Fill)
-                        .height(Length::Fixed(320.0)),
-                );
+                column![
+                    detail_panel,
+                    container(self.terminal_panel(term, &theme)).height(Length::FillPortion(2)),
+                ]
+                .spacing(12)
+                .into()
+            } else {
+                detail_panel.into()
             }
-        }
+        } else {
+            detail_panel.into()
+        };
 
-        let body = row![
-            container(sidebar::view(
-                &self.workspace.catalog,
-                self.selection.as_ref(),
-                &theme,
-                &self.search,
-                self.kind_filter,
-            ))
-            .width(Length::Fixed(320.0))
-            .height(Fill),
-            rule::vertical(1),
-            right_pane,
-        ]
-        .height(Fill);
+        let sidebar_panel = container(sidebar::view(
+            &self.workspace.catalog,
+            self.selection.as_ref(),
+            &theme,
+            &self.search,
+            self.kind_filter,
+        ))
+        .width(Length::Fixed(300.0))
+        .height(Fill)
+        .clip(true)
+        .style(widgets::panel(&theme));
 
-        column![self.header(&theme), rule::horizontal(1), body]
+        let body = row![sidebar_panel, right_pane].spacing(12).height(Fill);
+
+        column![self.header(&theme), body]
+            .spacing(12)
+            .padding(12)
             .height(Fill)
+            .into()
+    }
+
+    fn terminal_panel<'a>(
+        &'a self,
+        term: &'a iced_term::Terminal,
+        theme: &Theme,
+    ) -> Element<'a, Message> {
+        let muted = th::muted(theme);
+        let accent = theme.palette().primary;
+        let bg = th::surface_strong(theme);
+        let bdr = th::hairline(theme);
+        let shadow = th::card_shadow();
+
+        let bar = container(
+            row![
+                icon::icon(icon::TERMINAL)
+                    .size(13)
+                    .style(move |_: &Theme| text::Style {
+                        color: Some(accent)
+                    }),
+                text("Terminal")
+                    .size(12)
+                    .style(move |_| text::Style { color: Some(muted) }),
+                space().width(Fill),
+                widgets::icon_only(icon::CLOSE, Message::ToggleTerminal, theme),
+            ]
+            .align_y(Center)
+            .spacing(8),
+        )
+        .padding(Padding {
+            top: 5.0,
+            right: 6.0,
+            bottom: 5.0,
+            left: 12.0,
+        })
+        .width(Fill);
+
+        let view = container(iced_term::TerminalView::show(term).map(Message::Terminal))
+            .padding(8)
+            .width(Fill)
+            .height(Fill);
+
+        container(column![bar, rule::horizontal(1), view].height(Fill))
+            .clip(true)
+            .height(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg)),
+                border: Border {
+                    color: bdr,
+                    width: 1.0,
+                    radius: 16.0.into(),
+                },
+                shadow,
+                ..container::Style::default()
+            })
             .into()
     }
 
     fn header<'a>(&'a self, theme: &Theme) -> Element<'a, Message> {
         let muted = th::muted(theme);
+        let accent = theme.palette().primary;
         let workspace = self
             .workspace
             .options
@@ -415,8 +491,14 @@ impl App {
                         th::with_alpha(th::danger(), 0.15),
                     ));
                 }
-                right = right.push(widgets::secondary_button("+ New", Message::NewItem, theme));
-                right = right.push(widgets::secondary_button(
+                right = right.push(widgets::icon_button(
+                    icon::NEW,
+                    "New",
+                    Message::NewItem,
+                    theme,
+                ));
+                right = right.push(widgets::icon_button(
+                    icon::TERMINAL,
                     if self.terminal_open {
                         "Hide Terminal"
                     } else {
@@ -425,17 +507,18 @@ impl App {
                     Message::ToggleTerminal,
                     theme,
                 ));
-                right = right.push(widgets::secondary_button("Rescan", Message::Rescan, theme));
-                right = right.push(widgets::secondary_button(
-                    if self.dark { "Light" } else { "Dark" },
+                right = right.push(widgets::icon_only(icon::REFRESH, Message::Rescan, theme));
+                right = right.push(widgets::icon_only(
+                    if self.dark { icon::SUN } else { icon::MOON },
                     Message::ToggleTheme,
                     theme,
                 ));
             }
             Mode::EditAgent(st) => {
                 let on_save = st.is_valid().then_some(Message::SaveEdit);
-                right = right.push(widgets::primary_button("Save", on_save, theme));
-                right = right.push(widgets::secondary_button(
+                right = right.push(widgets::primary_button(icon::SAVE, "Save", on_save, theme));
+                right = right.push(widgets::icon_button(
+                    icon::CLOSE,
                     "Cancel",
                     Message::CancelEdit,
                     theme,
@@ -443,11 +526,13 @@ impl App {
             }
             Mode::EditSource(_) => {
                 right = right.push(widgets::primary_button(
+                    icon::SAVE,
                     "Save",
                     Some(Message::SaveEdit),
                     theme,
                 ));
-                right = right.push(widgets::secondary_button(
+                right = right.push(widgets::icon_button(
+                    icon::CLOSE,
                     "Cancel",
                     Message::CancelEdit,
                     theme,
@@ -455,11 +540,13 @@ impl App {
             }
             Mode::Wizard(_) => {
                 right = right.push(widgets::primary_button(
+                    icon::NEW,
                     "Create",
                     Some(Message::WizardCreate),
                     theme,
                 ));
-                right = right.push(widgets::secondary_button(
+                right = right.push(widgets::icon_button(
+                    icon::CLOSE,
                     "Cancel",
                     Message::CancelEdit,
                     theme,
@@ -467,9 +554,14 @@ impl App {
             }
         }
 
-        row![
+        let bar = row![
+            icon::icon(icon::AGENT)
+                .size(18)
+                .style(move |_: &Theme| text::Style {
+                    color: Some(accent)
+                }),
             text("Filament").size(18),
-            space().width(12.0),
+            space().width(10.0),
             text(workspace)
                 .size(12)
                 .style(move |_| text::Style { color: Some(muted) }),
@@ -477,13 +569,17 @@ impl App {
             right,
         ]
         .align_y(Center)
-        .padding(Padding {
-            top: 12.0,
-            right: 16.0,
-            bottom: 12.0,
-            left: 16.0,
-        })
-        .into()
+        .spacing(4);
+
+        container(bar)
+            .padding(Padding {
+                top: 10.0,
+                right: 12.0,
+                bottom: 10.0,
+                left: 14.0,
+            })
+            .style(widgets::panel(theme))
+            .into()
     }
 
     fn detail(&self) -> Element<'_, Message> {
