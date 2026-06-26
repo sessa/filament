@@ -16,6 +16,8 @@ pub struct App {
     selection: Option<ItemId>,
     /// Parsed markdown bodies, cached per item so we don't re-parse every frame.
     previews: HashMap<ItemId, markdown::Content>,
+    search: String,
+    kind_filter: Option<ItemKind>,
     dark: bool,
 }
 
@@ -23,6 +25,8 @@ pub struct App {
 pub enum Message {
     Select(ItemId),
     LinkClicked(markdown::Uri),
+    SearchChanged(String),
+    SetKindFilter(Option<ItemKind>),
     ToggleTheme,
     Rescan,
 }
@@ -36,6 +40,8 @@ impl App {
             workspace,
             selection: None,
             previews: HashMap::new(),
+            search: cli.search.clone().unwrap_or_default(),
+            kind_filter: None,
             dark: true,
         };
         app.selection = cli
@@ -91,6 +97,11 @@ impl App {
             Message::LinkClicked(_uri) => {
                 // Opening links in the browser arrives in a later milestone.
             }
+            Message::SearchChanged(q) => self.search = q,
+            Message::SetKindFilter(kind) => {
+                // Clicking the active filter again clears it.
+                self.kind_filter = if self.kind_filter == kind { None } else { kind };
+            }
             Message::ToggleTheme => self.dark = !self.dark,
             Message::Rescan => {
                 self.workspace.rescan();
@@ -113,7 +124,9 @@ impl App {
             container(sidebar::view(
                 &self.workspace.catalog,
                 self.selection.as_ref(),
-                &theme
+                &theme,
+                &self.search,
+                self.kind_filter,
             ))
             .width(Length::Fixed(320.0))
             .height(Fill),

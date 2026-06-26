@@ -1,12 +1,14 @@
-//! The left navigation pane: every config item, grouped by kind, with scope
-//! chips, color swatches, and error/shadow indicators.
+//! The left navigation pane: a search box, kind filter chips, and every config
+//! item grouped by kind with scope chips, color swatches, and error/shadow
+//! indicators.
 
-use iced::widget::{button, column, row, scrollable, space, text};
+use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
 use iced::{border, Background, Center, Color, Element, Fill, Padding, Shadow, Theme};
 
 use filament_core::{Catalog, Entry, ItemId, ItemKind};
 
 use crate::app::Message;
+use crate::search;
 use crate::theme as th;
 use crate::widgets;
 
@@ -14,38 +16,154 @@ pub fn view<'a>(
     catalog: &'a Catalog,
     selected: Option<&'a ItemId>,
     theme: &Theme,
+    query: &'a str,
+    kind_filter: Option<ItemKind>,
+) -> Element<'a, Message> {
+    let top = column![search_bar(query), filters(kind_filter, theme)]
+        .spacing(8)
+        .padding(Padding {
+            top: 10.0,
+            right: 8.0,
+            bottom: 8.0,
+            left: 8.0,
+        });
+
+    let list = scrollable(
+        container(build_list(catalog, selected, theme, query, kind_filter)).padding(Padding {
+            top: 0.0,
+            right: 8.0,
+            bottom: 12.0,
+            left: 8.0,
+        }),
+    )
+    .height(Fill);
+
+    column![top, list].height(Fill).into()
+}
+
+fn search_bar<'a>(query: &'a str) -> Element<'a, Message> {
+    text_input("Search…", query)
+        .on_input(Message::SearchChanged)
+        .size(13)
+        .padding(8)
+        .into()
+}
+
+fn filters<'a>(active: Option<ItemKind>, theme: &Theme) -> Element<'a, Message> {
+    let mut chips: Vec<Element<Message>> = vec![filter_chip(
+        "All",
+        active.is_none(),
+        Message::SetKindFilter(None),
+        theme,
+    )];
+    for kind in ItemKind::ALL {
+        chips.push(filter_chip(
+            short_label(kind),
+            active == Some(kind),
+            Message::SetKindFilter(Some(kind)),
+            theme,
+        ));
+    }
+    widgets::wrapped(chips, 3)
+}
+
+fn short_label(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Agent => "Agents",
+        ItemKind::Skill => "Skills",
+        ItemKind::Command => "Commands",
+        ItemKind::McpServer => "MCP",
+        ItemKind::Settings => "Settings",
+    }
+}
+
+fn filter_chip<'a>(
+    label: &'a str,
+    active: bool,
+    msg: Message,
+    theme: &Theme,
+) -> Element<'a, Message> {
+    let primary = theme.palette().primary;
+    let txt = theme.palette().text;
+    let surface = th::surface(theme);
+    button(text(label).size(12))
+        .padding(Padding {
+            top: 4.0,
+            right: 10.0,
+            bottom: 4.0,
+            left: 10.0,
+        })
+        .on_press(msg)
+        .style(move |_t, status| {
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let (bg, fg) = if active {
+                (th::with_alpha(primary, 0.25), txt)
+            } else if hovered {
+                (th::with_alpha(txt, 0.10), txt)
+            } else {
+                (surface, th::with_alpha(txt, 0.7))
+            };
+            button::Style {
+                background: Some(Background::Color(bg)),
+                text_color: fg,
+                border: border::rounded(20),
+                shadow: Shadow::default(),
+                snap: true,
+            }
+        })
+        .into()
+}
+
+fn build_list<'a>(
+    catalog: &'a Catalog,
+    selected: Option<&'a ItemId>,
+    theme: &Theme,
+    query: &str,
+    kind_filter: Option<ItemKind>,
 ) -> Element<'a, Message> {
     let muted = th::muted(theme);
-    let mut col = column![].spacing(2).padding(Padding {
-        top: 10.0,
-        right: 8.0,
-        bottom: 10.0,
-        left: 8.0,
-    });
-
+    let q_active = !query.trim().is_empty();
+    let mut col = column![].spacing(2);
     let mut any = false;
+
     for kind in ItemKind::ALL {
-        let entries: Vec<&Entry> = catalog.by_kind(kind).collect();
-        if entries.is_empty() {
+        if let Some(f) = kind_filter {
+            if f != kind {
+                continue;
+            }
+        }
+        let mut scored: Vec<(i32, &Entry)> = catalog
+            .by_kind(kind)
+            .filter_map(|e| search::entry_match(e, query).map(|s| (s, e)))
+            .collect();
+        if scored.is_empty() {
             continue;
         }
+        if q_active {
+            scored.sort_by(|a, b| b.0.cmp(&a.0));
+        }
         any = true;
-        col = col.push(group_header(kind, entries.len(), muted));
-        for entry in entries {
+        col = col.push(group_header(kind, scored.len(), muted));
+        for (_, entry) in scored {
             col = col.push(entry_row(entry, selected == Some(&entry.id), theme));
         }
         col = col.push(space().height(10.0));
     }
 
     if !any {
+        let message = if q_active {
+            "No matches."
+        } else {
+            "No configuration found in this workspace."
+        };
         col = col.push(
-            text("No configuration found in this workspace.")
+            text(message)
                 .size(13)
                 .style(move |_| text::Style { color: Some(muted) }),
         );
     }
 
-    scrollable(col).height(Fill).width(Fill).into()
+    col.into()
 }
 
 fn group_header<'a>(kind: ItemKind, count: usize, muted: Color) -> Element<'a, Message> {

@@ -10,6 +10,7 @@
 mod app;
 mod cli;
 mod inspector;
+mod search;
 mod sidebar;
 mod theme;
 mod widgets;
