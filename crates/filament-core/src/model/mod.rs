@@ -79,6 +79,12 @@ impl ItemKind {
     }
 }
 
+impl std::fmt::Display for ItemKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// A stable identity for an entry, derived from its source path (plus the server
 /// name for MCP entries, since one file holds many). Stable across rescans so
 /// the UI can preserve the selection.

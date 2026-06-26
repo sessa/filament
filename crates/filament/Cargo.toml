@@ -15,3 +15,6 @@ path = "src/main.rs"
 [dependencies]
 filament-core = { workspace = true }
 iced = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

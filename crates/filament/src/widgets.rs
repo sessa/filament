@@ -113,6 +113,25 @@ pub fn card<'a>(title: &'a str, body: Element<'a, Message>, theme: &Theme) -> El
     .into()
 }
 
+/// A surface card with no title, wrapping arbitrary content.
+pub fn card_titleless<'a>(body: Element<'a, Message>, theme: &Theme) -> Element<'a, Message> {
+    let surface = th::surface(theme);
+    let bdr = th::hairline(theme);
+    container(body)
+        .padding(16)
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(surface)),
+            border: Border {
+                color: bdr,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 /// A secondary/ghost button for toolbar actions.
 pub fn secondary_button<'a>(label: &'a str, msg: Message, theme: &Theme) -> Element<'a, Message> {
     let surface = th::surface(theme);
@@ -141,6 +160,38 @@ pub fn secondary_button<'a>(label: &'a str, msg: Message, theme: &Theme) -> Elem
                     width: 1.0,
                     radius: 8.0.into(),
                 },
+                shadow: Shadow::default(),
+                snap: true,
+            }
+        })
+        .into()
+}
+
+/// A primary (accent) button. `on_press == None` renders it disabled.
+pub fn primary_button<'a>(
+    label: &'a str,
+    on_press: Option<Message>,
+    theme: &Theme,
+) -> Element<'a, Message> {
+    let primary = theme.palette().primary;
+    button(text(label).size(13))
+        .padding(Padding {
+            top: 6.0,
+            right: 14.0,
+            bottom: 6.0,
+            left: 14.0,
+        })
+        .on_press_maybe(on_press)
+        .style(move |_theme, status| {
+            let bg = match status {
+                button::Status::Disabled => th::with_alpha(primary, 0.30),
+                button::Status::Hovered | button::Status::Pressed => th::with_alpha(primary, 0.85),
+                button::Status::Active => primary,
+            };
+            button::Style {
+                background: Some(Background::Color(bg)),
+                text_color: Color::WHITE,
+                border: border::rounded(8),
                 shadow: Shadow::default(),
                 snap: true,
             }

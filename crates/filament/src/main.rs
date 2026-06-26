@@ -9,11 +9,13 @@
 
 mod app;
 mod cli;
+mod editor;
 mod inspector;
 mod search;
 mod sidebar;
 mod theme;
 mod widgets;
+mod wizard;
 
 use app::App;
 

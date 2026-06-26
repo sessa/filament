@@ -48,6 +48,18 @@ fn header<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
     );
 
     let mut right = row![].spacing(6).align_y(Center);
+    if matches!(entry.payload, Payload::Agent(_)) {
+        right = right.push(widgets::secondary_button(
+            "Edit",
+            Message::EnterEditAgent,
+            theme,
+        ));
+    }
+    right = right.push(widgets::secondary_button(
+        "Source",
+        Message::EnterEditSource,
+        theme,
+    ));
     if entry.shadowed_by.is_some() {
         right = right.push(widgets::pill(
             "shadowed",

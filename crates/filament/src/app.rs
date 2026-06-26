@@ -2,14 +2,29 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{column, container, markdown, row, rule, space, text};
+use iced::widget::{column, container, markdown, row, rule, scrollable, space, text, text_editor};
 use iced::{Center, Element, Fill, Length, Padding, Task, Theme};
 
 use filament_core::{Entry, ItemId, ItemKind, Workspace};
 
 use crate::cli::Cli;
 use crate::theme as th;
-use crate::{inspector, sidebar, widgets};
+use crate::{editor, inspector, sidebar, widgets, wizard};
+
+/// What the right-hand pane is doing. The editor states are boxed because they
+/// are much larger than the unit `Inspect` variant.
+enum Mode {
+    Inspect,
+    EditAgent(Box<editor::AgentEdit>),
+    EditSource(Box<editor::SourceEdit>),
+    Wizard(Box<wizard::Wizard>),
+}
+
+impl Mode {
+    fn is_inspect(&self) -> bool {
+        matches!(self, Mode::Inspect)
+    }
+}
 
 pub struct App {
     workspace: Workspace,
@@ -18,6 +33,7 @@ pub struct App {
     previews: HashMap<ItemId, markdown::Content>,
     search: String,
     kind_filter: Option<ItemKind>,
+    mode: Mode,
     dark: bool,
 }
 
@@ -29,6 +45,19 @@ pub enum Message {
     SetKindFilter(Option<ItemKind>),
     ToggleTheme,
     Rescan,
+
+    // editing
+    EnterEditAgent,
+    EnterEditSource,
+    CancelEdit,
+    SaveEdit,
+    EditField(editor::FieldMsg),
+    BodyAction(text_editor::Action),
+
+    // creation
+    NewItem,
+    WizardField(wizard::WizardMsg),
+    WizardCreate,
 }
 
 impl App {
@@ -42,6 +71,7 @@ impl App {
             previews: HashMap::new(),
             search: cli.search.clone().unwrap_or_default(),
             kind_filter: None,
+            mode: Mode::Inspect,
             dark: true,
         };
         app.selection = cli
@@ -73,6 +103,15 @@ impl App {
             .or_else(|| app.workspace.catalog.entries.first().map(|e| e.id.clone()));
         app.ensure_preview();
 
+        // Optional start-in-edit/wizard modes for testing and screenshots.
+        if cli.start_wizard {
+            app.mode = Mode::Wizard(Box::new(wizard::Wizard::new()));
+        } else if cli.start_edit {
+            if let Some(st) = app.selected_entry().and_then(editor::AgentEdit::new) {
+                app.mode = Mode::EditAgent(Box::new(st));
+            }
+        }
+
         (app, Task::none())
     }
 
@@ -91,22 +130,21 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Select(id) => {
-                self.selection = Some(id);
-                self.ensure_preview();
+                // Navigation is disabled while editing to avoid losing edits.
+                if self.mode.is_inspect() {
+                    self.selection = Some(id);
+                    self.ensure_preview();
+                }
             }
-            Message::LinkClicked(_uri) => {
-                // Opening links in the browser arrives in a later milestone.
-            }
+            Message::LinkClicked(_uri) => {}
             Message::SearchChanged(q) => self.search = q,
             Message::SetKindFilter(kind) => {
-                // Clicking the active filter again clears it.
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => self.dark = !self.dark,
             Message::Rescan => {
                 self.workspace.rescan();
                 self.previews.clear();
-                // Drop a selection that no longer exists.
                 if let Some(id) = &self.selection {
                     if self.workspace.catalog.get(id).is_none() {
                         self.selection = None;
@@ -114,12 +152,126 @@ impl App {
                 }
                 self.ensure_preview();
             }
+
+            Message::EnterEditAgent => {
+                let st = self.selected_entry().and_then(editor::AgentEdit::new);
+                if let Some(st) = st {
+                    self.mode = Mode::EditAgent(Box::new(st));
+                }
+            }
+            Message::EnterEditSource => {
+                let info = self
+                    .selected_entry()
+                    .map(|e| (e.id.clone(), e.source_path.clone()));
+                if let Some((id, path)) = info {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        self.mode =
+                            Mode::EditSource(Box::new(editor::SourceEdit::new(id, path, &text)));
+                    }
+                }
+            }
+            Message::CancelEdit => self.mode = Mode::Inspect,
+            Message::EditField(msg) => {
+                if let Mode::EditAgent(st) = &mut self.mode {
+                    st.apply(msg);
+                }
+            }
+            Message::BodyAction(action) => match &mut self.mode {
+                Mode::EditAgent(st) => st.body_action(action),
+                Mode::EditSource(st) => st.body_action(action),
+                _ => {}
+            },
+            Message::SaveEdit => self.save_edit(),
+
+            Message::NewItem => self.mode = Mode::Wizard(Box::new(wizard::Wizard::new())),
+            Message::WizardField(msg) => {
+                if let Mode::Wizard(w) = &mut self.mode {
+                    w.apply(msg);
+                }
+            }
+            Message::WizardCreate => self.create_from_wizard(),
         }
         Task::none()
     }
 
+    fn save_edit(&mut self) {
+        enum Outcome {
+            Saved(ItemId),
+            Failed(String),
+        }
+        let outcome = match &self.mode {
+            Mode::EditAgent(st) => Some(if !st.is_valid() {
+                Outcome::Failed("Fix the validation errors before saving.".into())
+            } else {
+                match filament_core::edit::atomic_write(&st.path, &st.build_text()) {
+                    Ok(()) => Outcome::Saved(st.id.clone()),
+                    Err(e) => Outcome::Failed(format!("Save failed: {e}")),
+                }
+            }),
+            Mode::EditSource(st) => Some(
+                match filament_core::edit::atomic_write(&st.path, &st.text()) {
+                    Ok(()) => Outcome::Saved(st.id.clone()),
+                    Err(e) => Outcome::Failed(format!("Save failed: {e}")),
+                },
+            ),
+            _ => None,
+        };
+
+        match outcome {
+            Some(Outcome::Saved(id)) => {
+                self.workspace.rescan();
+                self.previews.clear();
+                self.selection = Some(id);
+                self.mode = Mode::Inspect;
+                self.ensure_preview();
+            }
+            Some(Outcome::Failed(msg)) => match &mut self.mode {
+                Mode::EditAgent(st) => st.status = Some(msg),
+                Mode::EditSource(st) => st.status = Some(msg),
+                _ => {}
+            },
+            None => {}
+        }
+    }
+
+    fn create_from_wizard(&mut self) {
+        let workspace = self.workspace.options.workspace.clone();
+        let home = self.workspace.options.home_dir();
+        let result = match &self.mode {
+            Mode::Wizard(w) => Some(w.create(workspace.as_deref(), home.as_deref())),
+            _ => None,
+        };
+        match result {
+            Some(Ok((kind, path))) => {
+                self.workspace.rescan();
+                self.previews.clear();
+                self.selection = Some(filament_core::ItemId::for_path(kind, &path));
+                self.mode = Mode::Inspect;
+                self.ensure_preview();
+            }
+            Some(Err(e)) => {
+                if let Mode::Wizard(w) = &mut self.mode {
+                    w.error = Some(e);
+                }
+            }
+            None => {}
+        }
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
         let theme = self.theme();
+
+        let detail: Element<Message> = match &self.mode {
+            Mode::Inspect => self.detail(),
+            Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(24))
+                .height(Fill)
+                .into(),
+            Mode::EditSource(st) => container(st.view(&theme)).padding(24).height(Fill).into(),
+            Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(24))
+                .height(Fill)
+                .into(),
+        };
+
         let body = row![
             container(sidebar::view(
                 &self.workspace.catalog,
@@ -131,7 +283,7 @@ impl App {
             .width(Length::Fixed(320.0))
             .height(Fill),
             rule::vertical(1),
-            container(self.detail()).width(Fill).height(Fill),
+            container(detail).width(Fill).height(Fill),
         ]
         .height(Fill);
 
@@ -151,20 +303,58 @@ impl App {
             .unwrap_or_default();
 
         let mut right = row![].spacing(8).align_y(Center);
-        let invalid = self.workspace.catalog.invalid_count();
-        if invalid > 0 {
-            right = right.push(widgets::pill(
-                format!("{invalid} invalid"),
-                th::danger(),
-                th::with_alpha(th::danger(), 0.15),
-            ));
+        match &self.mode {
+            Mode::Inspect => {
+                let invalid = self.workspace.catalog.invalid_count();
+                if invalid > 0 {
+                    right = right.push(widgets::pill(
+                        format!("{invalid} invalid"),
+                        th::danger(),
+                        th::with_alpha(th::danger(), 0.15),
+                    ));
+                }
+                right = right.push(widgets::secondary_button("+ New", Message::NewItem, theme));
+                right = right.push(widgets::secondary_button("Rescan", Message::Rescan, theme));
+                right = right.push(widgets::secondary_button(
+                    if self.dark { "Light" } else { "Dark" },
+                    Message::ToggleTheme,
+                    theme,
+                ));
+            }
+            Mode::EditAgent(st) => {
+                let on_save = st.is_valid().then_some(Message::SaveEdit);
+                right = right.push(widgets::primary_button("Save", on_save, theme));
+                right = right.push(widgets::secondary_button(
+                    "Cancel",
+                    Message::CancelEdit,
+                    theme,
+                ));
+            }
+            Mode::EditSource(_) => {
+                right = right.push(widgets::primary_button(
+                    "Save",
+                    Some(Message::SaveEdit),
+                    theme,
+                ));
+                right = right.push(widgets::secondary_button(
+                    "Cancel",
+                    Message::CancelEdit,
+                    theme,
+                ));
+            }
+            Mode::Wizard(_) => {
+                right = right.push(widgets::primary_button(
+                    "Create",
+                    Some(Message::WizardCreate),
+                    theme,
+                ));
+                right = right.push(widgets::secondary_button(
+                    "Cancel",
+                    Message::CancelEdit,
+                    theme,
+                ));
+            }
         }
-        right = right.push(widgets::secondary_button("Rescan", Message::Rescan, theme));
-        right = right.push(widgets::secondary_button(
-            if self.dark { "Light" } else { "Dark" },
-            Message::ToggleTheme,
-            theme,
-        ));
 
         row![
             text("Filament").size(18),

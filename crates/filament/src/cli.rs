@@ -20,6 +20,10 @@ pub struct Cli {
     pub select: Option<String>,
     /// Prefill the search box (handy for deep-linking and headless screenshots).
     pub search: Option<String>,
+    /// Start in the agent editor for the selected item (testing/screenshots).
+    pub start_edit: bool,
+    /// Start in the creation wizard (testing/screenshots).
+    pub start_wizard: bool,
 }
 
 impl Cli {
@@ -29,6 +33,8 @@ impl Cli {
         let mut include_user = true;
         let mut select = None;
         let mut search = None;
+        let mut start_edit = false;
+        let mut start_wizard = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -37,6 +43,8 @@ impl Cli {
                 "--home" => home = args.next().map(PathBuf::from),
                 "--select" | "-s" => select = args.next(),
                 "--search" | "-q" => search = args.next(),
+                "--edit" => start_edit = true,
+                "--wizard" => start_wizard = true,
                 "--no-user" => include_user = false,
                 other if !other.starts_with('-') && workspace.is_none() => {
                     workspace = Some(PathBuf::from(other));
@@ -55,6 +63,8 @@ impl Cli {
             include_user,
             select,
             search,
+            start_edit,
+            start_wizard,
         }
     }
 
