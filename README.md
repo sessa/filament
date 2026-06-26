@@ -100,11 +100,14 @@ pipelines that publish a macOS `Filament.app` and a Linux tarball to the matchin
 GitHub Release. (CI also builds release binaries on every push across all three
 OSes as a check.)
 
-The macOS `.app` is **unsigned** (notarization needs an Apple Developer ID, not
-configured here). On Apple Silicon a freshly downloaded copy is quarantined by the
-browser, so the first launch shows *"Filament.app is damaged and can't be
-opened."* This is expected for unsigned apps — the app is fine. Remove the
-quarantine attribute once, then open it normally:
+When the release pipeline's Apple Developer ID secrets are configured the macOS
+`.app` is signed with a hardened runtime, **notarized**, and stapled, so it opens
+with a normal double-click straight from the download.
+
+If you're running an **unsigned** build (built from source, or a release made
+before notarization was set up), a browser-downloaded copy is quarantined and
+Apple Silicon shows *"Filament.app is damaged and can't be opened."* The app is
+fine — just remove the quarantine attribute once, then open it normally:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Filament.app

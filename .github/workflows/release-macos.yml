@@ -3,10 +3,21 @@ name: Release (macOS)
 # macOS build pipeline. Publishes a `Filament.app` zip to a GitHub Release — on a
 # `v*` tag push it attaches to that tag's release; on a manual run
 # (workflow_dispatch) it creates the tag + release server-side at the dispatched
-# commit. The app is ad-hoc signed but not notarized (Developer ID + notarization
-# need Apple secrets, not configured here), so a downloaded copy is quarantined
-# and Gatekeeper reports it as "damaged" on first launch. Users clear it with
-# `xattr -dr com.apple.quarantine Filament.app` — see the README.
+# commit.
+#
+# Signing: when the Developer ID + notary secrets below are configured the app is
+# signed with a hardened runtime, notarized by Apple, and stapled, so it opens
+# with a double-click straight from the download. When they're absent the build
+# falls back to an ad-hoc signature (unnotarized) — Gatekeeper then reports a
+# downloaded copy as "damaged" until the user runs
+# `xattr -dr com.apple.quarantine Filament.app` (see the README).
+#
+# Required repository secrets for notarized builds:
+#   MACOS_CERTIFICATE          base64 of the Developer ID Application .p12
+#   MACOS_CERTIFICATE_PWD      password protecting that .p12
+#   MACOS_NOTARY_API_KEY       base64 of the App Store Connect API key .p8
+#   MACOS_NOTARY_API_KEY_ID    the API key's Key ID
+#   MACOS_NOTARY_API_ISSUER_ID the API key's Issuer ID
 on:
   push:
     tags: ["v*"]
@@ -22,6 +33,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Apple Developer Team ID — public (it's embedded in the signature), not a secret.
+  APPLE_TEAM_ID: M6Y9QV5JN7
 
 jobs:
   build:
@@ -35,21 +48,88 @@ jobs:
       - name: Build release
         run: cargo build --release -p filament
 
-      - name: Bundle Filament.app
+      - name: Assemble Filament.app
         run: |
           app="dist/Filament.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp packaging/macos/Info.plist "$app/Contents/Info.plist"
           cp target/release/filament "$app/Contents/MacOS/filament"
           chmod +x "$app/Contents/MacOS/filament"
-          # Ad-hoc sign the whole bundle so it carries one valid (if unidentified)
-          # signature. This doesn't satisfy Gatekeeper for quarantined downloads
-          # (that needs notarization) but keeps the bundle well-formed so locally
-          # built / de-quarantined copies launch cleanly.
-          codesign --force --deep --sign - "$app"
-          codesign --verify --deep --strict "$app"
-          ditto -c -k --keepParent "$app" filament-macos-arm64.zip
-          ls -la filament-macos-arm64.zip
+
+      # Sign + notarize when the secrets are present; otherwise ad-hoc sign so the
+      # bundle is still well-formed. All secrets are mapped into env first so the
+      # step can branch on their presence without leaking values into the log.
+      - name: Sign, notarize & package
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_API_KEY_ID: ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
+          MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          app="dist/Filament.app"
+          zip="filament-macos-arm64.zip"
+
+          if [ -z "${MACOS_CERTIFICATE:-}" ] || [ -z "${MACOS_NOTARY_API_KEY:-}" ]; then
+            echo "::warning::Developer ID / notary secrets not configured — producing an ad-hoc signed, UNNOTARIZED build. Downloaders must clear quarantine manually."
+            codesign --force --deep --sign - "$app"
+            codesign --verify --deep --strict "$app"
+            ditto -c -k --keepParent "$app" "$zip"
+            ls -la "$zip"
+            exit 0
+          fi
+
+          echo "Importing Developer ID certificate into a temporary keychain"
+          keychain="$RUNNER_TEMP/app-signing.keychain-db"
+          keychain_pwd="$(uuidgen)"
+          security create-keychain -p "$keychain_pwd" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pwd" "$keychain"
+
+          cert="$RUNNER_TEMP/developer_id.p12"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$cert"
+          security import "$cert" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_pwd" "$keychain" >/dev/null
+          # Add the new keychain to the search list so codesign can find the identity.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | sed 's/[\" ]//g')
+
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$identity" ]; then
+            echo "::error::No 'Developer ID Application' identity found in the imported certificate." >&2
+            exit 1
+          fi
+          echo "Signing as: $identity"
+
+          # Hardened runtime + secure timestamp. Sign the inner executable first,
+          # then the bundle (avoids the deprecated --deep for signing).
+          codesign --force --options runtime --timestamp \
+            --sign "$identity" "$app/Contents/MacOS/filament"
+          codesign --force --options runtime --timestamp \
+            --sign "$identity" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          echo "Submitting to Apple notary service"
+          notary_key="$RUNNER_TEMP/notary_key.p8"
+          printf '%s' "$MACOS_NOTARY_API_KEY" | base64 --decode > "$notary_key"
+          ditto -c -k --keepParent "$app" "$zip"
+          xcrun notarytool submit "$zip" \
+            --key "$notary_key" \
+            --key-id "$MACOS_NOTARY_API_KEY_ID" \
+            --issuer "$MACOS_NOTARY_API_ISSUER_ID" \
+            --wait
+
+          echo "Stapling the notarization ticket and re-packaging"
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          rm -f "$zip"
+          ditto -c -k --keepParent "$app" "$zip"
+          ls -la "$zip"
+
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/app-signing.keychain-db" || true
 
       # Publish to a GitHub Release. On a v* tag push this attaches to that tag's
       # release; on manual dispatch the action creates the tag + release (server
