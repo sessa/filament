@@ -1,0 +1,17 @@
+[package]
+name = "filament"
+description = "A polished desktop dashboard for browsing and editing Claude Code configuration."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+default-run = "filament"
+
+[[bin]]
+name = "filament"
+path = "src/main.rs"
+
+[dependencies]
+filament-core = { workspace = true }
+iced = { workspace = true }

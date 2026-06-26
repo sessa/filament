@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/filament-core"]
+members = ["crates/filament-core", "crates/filament"]
 
 [workspace.package]
 edition = "2021"
@@ -17,6 +17,15 @@ thiserror = "2"
 walkdir = "2.5"
 directories = "6"
 tempfile = "3"
+
+# UI / binary
+filament-core = { path = "crates/filament-core" }
+iced = { version = "0.14", features = ["markdown", "highlighter"] }
+iced_highlighter = "0.14"
+rfd = "0.15"
+nucleo = "0.5"
+notify = "8"
+notify-debouncer-full = "0.7"
 
 [profile.release]
 lto = "thin"
