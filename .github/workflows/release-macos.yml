@@ -3,8 +3,10 @@ name: Release (macOS)
 # macOS build pipeline. Publishes a `Filament.app` zip to a GitHub Release — on a
 # `v*` tag push it attaches to that tag's release; on a manual run
 # (workflow_dispatch) it creates the tag + release server-side at the dispatched
-# commit. The app is unsigned — Gatekeeper will require a right-click → Open on
-# first launch (code signing needs Apple Developer secrets, not configured here).
+# commit. The app is ad-hoc signed but not notarized (Developer ID + notarization
+# need Apple secrets, not configured here), so a downloaded copy is quarantined
+# and Gatekeeper reports it as "damaged" on first launch. Users clear it with
+# `xattr -dr com.apple.quarantine Filament.app` — see the README.
 on:
   push:
     tags: ["v*"]
@@ -40,6 +42,12 @@ jobs:
           cp packaging/macos/Info.plist "$app/Contents/Info.plist"
           cp target/release/filament "$app/Contents/MacOS/filament"
           chmod +x "$app/Contents/MacOS/filament"
+          # Ad-hoc sign the whole bundle so it carries one valid (if unidentified)
+          # signature. This doesn't satisfy Gatekeeper for quarantined downloads
+          # (that needs notarization) but keeps the bundle well-formed so locally
+          # built / de-quarantined copies launch cleanly.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
           ditto -c -k --keepParent "$app" filament-macos-arm64.zip
           ls -la filament-macos-arm64.zip
 

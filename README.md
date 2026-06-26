@@ -98,8 +98,20 @@ stored in your OS data directory, not in the repo.
 **Prebuilt downloads:** pushing a `vX.Y.Z` tag runs two separate per-OS release
 pipelines that publish a macOS `Filament.app` and a Linux tarball to the matching
 GitHub Release. (CI also builds release binaries on every push across all three
-OSes as a check.) The macOS `.app` is unsigned, so the first launch needs a
-right-click → **Open**.
+OSes as a check.)
+
+The macOS `.app` is **unsigned** (notarization needs an Apple Developer ID, not
+configured here). On Apple Silicon a freshly downloaded copy is quarantined by the
+browser, so the first launch shows *"Filament.app is damaged and can't be
+opened."* This is expected for unsigned apps — the app is fine. Remove the
+quarantine attribute once, then open it normally:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Filament.app
+```
+
+(The right-click → **Open** trick only clears the milder "unidentified developer"
+dialog, not the "damaged" one, so use the command above.)
 
 **From source** — requires Rust 1.94+ (pinned via `rust-toolchain.toml`).
 
