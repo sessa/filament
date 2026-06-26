@@ -38,12 +38,24 @@ impl App {
             previews: HashMap::new(),
             dark: true,
         };
-        app.selection = app
-            .workspace
-            .catalog
-            .by_kind(ItemKind::Agent)
-            .find(|e| e.is_valid())
-            .map(|e| e.id.clone())
+        app.selection = cli
+            .select
+            .as_ref()
+            .and_then(|name| {
+                app.workspace
+                    .catalog
+                    .entries
+                    .iter()
+                    .find(|e| &e.name == name)
+                    .map(|e| e.id.clone())
+            })
+            .or_else(|| {
+                app.workspace
+                    .catalog
+                    .by_kind(ItemKind::Agent)
+                    .find(|e| e.is_valid())
+                    .map(|e| e.id.clone())
+            })
             .or_else(|| {
                 app.workspace
                     .catalog
