@@ -380,8 +380,12 @@ pub fn create_session(
 
 /// Remove a session, optionally deleting its git worktree.
 ///
-/// Worktrees on a *protected* branch (the base/default branch) are kept on disk
-/// even when `delete_worktree` is set — matching crow's "safe deletion".
+/// This is "safe deletion" in two senses, both matching crow:
+/// - a worktree on a *protected* branch (the base/default branch) is always kept
+///   on disk; and
+/// - the worktree is removed **without** `--force`, so git refuses (and this
+///   returns an error, leaving the session tracked) when it has uncommitted or
+///   untracked changes — never silently discarding work.
 pub fn remove_session(
     store: &mut SessionStore,
     id: &str,
@@ -393,7 +397,7 @@ pub fn remove_session(
     let protected = session.branch == session.base_branch
         || git::default_branch(&session.repo_root).as_deref() == Some(session.branch.as_str());
     if delete_worktree && !protected && session.worktree.exists() {
-        git::remove_worktree(&session.repo_root, &session.worktree, true)?;
+        git::remove_worktree(&session.repo_root, &session.worktree, false)?;
     }
     store.remove(id);
     Ok(())
