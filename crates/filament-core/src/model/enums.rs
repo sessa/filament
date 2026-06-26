@@ -197,3 +197,81 @@ impl std::fmt::Display for Isolation {
         f.write_str(self.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{de::DeserializeOwned, Serialize};
+
+    /// For every variant, `as_str()` must be the exact on-disk spelling: it
+    /// should deserialize back to the same variant, and serialize to the same
+    /// string. This guards against a `#[serde(rename = …)]` drifting away from
+    /// `as_str()`/`Display`.
+    fn assert_roundtrips<T>(variants: &[T], as_str: impl Fn(&T) -> &'static str)
+    where
+        T: DeserializeOwned + Serialize + PartialEq + std::fmt::Debug,
+    {
+        for v in variants {
+            let on_disk = as_str(v);
+            let parsed: T = serde_norway::from_str(on_disk)
+                .unwrap_or_else(|e| panic!("`{on_disk}` should deserialize: {e}"));
+            assert_eq!(&parsed, v, "deserialize(`{on_disk}`)");
+
+            let serialized = serde_norway::to_string(v).unwrap();
+            assert_eq!(
+                serialized.trim(),
+                on_disk,
+                "serialize({v:?}) should equal its as_str()"
+            );
+        }
+    }
+
+    #[test]
+    fn permission_mode_camelcase_spellings_roundtrip() {
+        assert_roundtrips(&PermissionMode::ALL, |v| v.as_str());
+        // Spot-check the camelCase ones that are easy to typo.
+        assert_eq!(PermissionMode::AcceptEdits.as_str(), "acceptEdits");
+        assert_eq!(PermissionMode::DontAsk.as_str(), "dontAsk");
+        assert_eq!(
+            PermissionMode::BypassPermissions.as_str(),
+            "bypassPermissions"
+        );
+    }
+
+    #[test]
+    fn effort_spellings_roundtrip() {
+        assert_roundtrips(&Effort::ALL, |v| v.as_str());
+    }
+
+    #[test]
+    fn agent_color_spellings_roundtrip() {
+        assert_roundtrips(&AgentColor::ALL, |v| v.as_str());
+    }
+
+    #[test]
+    fn memory_spellings_roundtrip() {
+        assert_roundtrips(&Memory::ALL, |v| v.as_str());
+    }
+
+    #[test]
+    fn isolation_spellings_roundtrip() {
+        assert_roundtrips(&Isolation::ALL, |v| v.as_str());
+    }
+
+    #[test]
+    fn display_matches_as_str() {
+        assert_eq!(PermissionMode::AcceptEdits.to_string(), "acceptEdits");
+        assert_eq!(Effort::Xhigh.to_string(), "xhigh");
+        assert_eq!(AgentColor::Cyan.to_string(), "cyan");
+        assert_eq!(Memory::Project.to_string(), "project");
+        assert_eq!(Isolation::Worktree.to_string(), "worktree");
+    }
+
+    #[test]
+    fn agent_color_rgb_is_distinct_per_variant() {
+        let mut seen = std::collections::HashSet::new();
+        for c in AgentColor::ALL {
+            assert!(seen.insert(c.rgb()), "duplicate rgb for {c:?}");
+        }
+    }
+}
