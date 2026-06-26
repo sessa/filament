@@ -5,6 +5,11 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Only fail on *unmaintained* advisories for our own (workspace) dependencies.
+# Transitive crates pulled in by iced/wgpu (e.g. `paste`, `yaml-rust`) are
+# flagged unmaintained upstream with no available upgrade — out of our control.
+# Security vulnerabilities and unsound advisories still fail across the whole tree.
+unmaintained = "workspace"
 ignore = []
 
 [bans]
