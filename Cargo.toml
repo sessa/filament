@@ -22,6 +22,7 @@ tempfile = "3"
 filament-core = { path = "crates/filament-core" }
 iced = { version = "0.14", features = ["markdown", "highlighter"] }
 iced_highlighter = "0.14"
+iced_term = "0.8"
 rfd = "0.15"
 nucleo = "0.5"
 notify = "8"

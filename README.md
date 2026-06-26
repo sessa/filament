@@ -34,6 +34,11 @@ safely. Filament turns the whole config into a legible, editable dashboard.
   verbatim. Writes are atomic.
 - **Creation wizard** — scaffold a new agent, skill, or command into the scope of
   your choice from a template.
+- **Integrated terminal** — an embedded terminal panel (Alacritty engine via
+  `iced_term`) so you can run `claude` for the selected agent (the **Run**
+  button) or any command, without leaving the app. *(Ghostty itself can't be
+  embedded in an Iced/wgpu app yet — its renderer isn't released — so the
+  terminal is Alacritty-backed.)*
 - **Live refresh** — external edits to your config files show up automatically,
   thanks to a debounced filesystem watcher.
 - **Invalid files don't break it** — a malformed file is listed with an error
@@ -42,6 +47,8 @@ safely. Filament turns the whole config into a legible, editable dashboard.
 | Editor | Settings & hooks |
 | --- | --- |
 | ![Agent editor](docs/screenshot-editor.png) | ![Settings](docs/screenshot-settings.png) |
+
+![Integrated terminal](docs/screenshot-terminal.png)
 
 ## Install / build
 

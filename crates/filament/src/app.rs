@@ -9,7 +9,7 @@ use filament_core::{Entry, ItemId, ItemKind, Workspace};
 
 use crate::cli::Cli;
 use crate::theme as th;
-use crate::{editor, inspector, sidebar, watcher, widgets, wizard};
+use crate::{editor, inspector, sidebar, terminal, watcher, widgets, wizard};
 
 /// What the right-hand pane is doing. The editor states are boxed because they
 /// are much larger than the unit `Inspect` variant.
@@ -34,6 +34,10 @@ pub struct App {
     search: String,
     kind_filter: Option<ItemKind>,
     mode: Mode,
+    /// The integrated terminal (lazily created); kept alive across hide/show.
+    terminal: Option<iced_term::Terminal>,
+    terminal_open: bool,
+    next_term_id: u64,
     dark: bool,
 }
 
@@ -46,6 +50,11 @@ pub enum Message {
     ToggleTheme,
     Rescan,
     FsChanged,
+
+    // terminal
+    Terminal(iced_term::Event),
+    ToggleTerminal,
+    RunSelectedAgent,
 
     // editing
     EnterEditAgent,
@@ -73,6 +82,9 @@ impl App {
             search: cli.search.clone().unwrap_or_default(),
             kind_filter: None,
             mode: Mode::Inspect,
+            terminal: None,
+            terminal_open: false,
+            next_term_id: 0,
             dark: true,
         };
         app.selection = cli
@@ -112,6 +124,10 @@ impl App {
                 app.mode = Mode::EditAgent(Box::new(st));
             }
         }
+        if cli.start_terminal {
+            let cwd = app.workspace.options.workspace.clone();
+            app.open_terminal(terminal::shell_settings(cwd));
+        }
 
         (app, Task::none())
     }
@@ -128,9 +144,31 @@ impl App {
         }
     }
 
-    /// Watch the config locations so external edits refresh the UI live.
+    /// Watch the config locations so external edits refresh the UI live, plus
+    /// the terminal backend's event stream when a terminal exists.
     pub fn subscription(&self) -> Subscription<Message> {
-        watcher::subscription(self.watch_roots())
+        let watch = watcher::subscription(self.watch_roots());
+        match &self.terminal {
+            Some(term) => Subscription::batch([watch, term.subscription().map(Message::Terminal)]),
+            None => watch,
+        }
+    }
+
+    /// Create (or replace) the integrated terminal with the given settings and
+    /// reveal the panel. Replacing an existing terminal ends its session.
+    fn open_terminal(&mut self, settings: iced_term::settings::Settings) {
+        let id = self.next_term_id;
+        self.next_term_id += 1;
+        match iced_term::Terminal::new(id, settings) {
+            Ok(term) => {
+                self.terminal = Some(term);
+                self.terminal_open = true;
+            }
+            Err(_) => {
+                self.terminal = None;
+                self.terminal_open = false;
+            }
+        }
     }
 
     fn watch_roots(&self) -> Vec<std::path::PathBuf> {
@@ -182,6 +220,28 @@ impl App {
             }
             Message::ToggleTheme => self.dark = !self.dark,
             Message::Rescan | Message::FsChanged => self.rescan(),
+
+            Message::ToggleTerminal => {
+                if self.terminal.is_some() {
+                    self.terminal_open = !self.terminal_open;
+                } else {
+                    let cwd = self.workspace.options.workspace.clone();
+                    self.open_terminal(terminal::shell_settings(cwd));
+                }
+            }
+            Message::RunSelectedAgent => {
+                let cwd = self.workspace.options.workspace.clone();
+                self.open_terminal(terminal::agent_settings(cwd));
+            }
+            Message::Terminal(iced_term::Event::BackendCall(_, cmd)) => {
+                if let Some(term) = &mut self.terminal {
+                    let action = term.handle(iced_term::Command::ProxyToBackend(cmd));
+                    if matches!(action, iced_term::actions::Action::Shutdown) {
+                        self.terminal = None;
+                        self.terminal_open = false;
+                    }
+                }
+            }
 
             Message::EnterEditAgent => {
                 let st = self.selected_entry().and_then(editor::AgentEdit::new);
@@ -302,6 +362,18 @@ impl App {
                 .into(),
         };
 
+        // Right pane: the detail/editor, with the terminal docked below it.
+        let mut right_pane = column![container(detail).width(Fill).height(Fill)].height(Fill);
+        if self.terminal_open {
+            if let Some(term) = &self.terminal {
+                right_pane = right_pane.push(rule::horizontal(1)).push(
+                    container(iced_term::TerminalView::show(term).map(Message::Terminal))
+                        .width(Fill)
+                        .height(Length::Fixed(320.0)),
+                );
+            }
+        }
+
         let body = row![
             container(sidebar::view(
                 &self.workspace.catalog,
@@ -313,7 +385,7 @@ impl App {
             .width(Length::Fixed(320.0))
             .height(Fill),
             rule::vertical(1),
-            container(detail).width(Fill).height(Fill),
+            right_pane,
         ]
         .height(Fill);
 
@@ -344,6 +416,15 @@ impl App {
                     ));
                 }
                 right = right.push(widgets::secondary_button("+ New", Message::NewItem, theme));
+                right = right.push(widgets::secondary_button(
+                    if self.terminal_open {
+                        "Hide Terminal"
+                    } else {
+                        "Terminal"
+                    },
+                    Message::ToggleTerminal,
+                    theme,
+                ));
                 right = right.push(widgets::secondary_button("Rescan", Message::Rescan, theme));
                 right = right.push(widgets::secondary_button(
                     if self.dark { "Light" } else { "Dark" },

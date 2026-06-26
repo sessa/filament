@@ -24,6 +24,8 @@ pub struct Cli {
     pub start_edit: bool,
     /// Start in the creation wizard (testing/screenshots).
     pub start_wizard: bool,
+    /// Open the integrated terminal on launch (testing/screenshots).
+    pub start_terminal: bool,
 }
 
 impl Cli {
@@ -35,6 +37,7 @@ impl Cli {
         let mut search = None;
         let mut start_edit = false;
         let mut start_wizard = false;
+        let mut start_terminal = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -45,6 +48,7 @@ impl Cli {
                 "--search" | "-q" => search = args.next(),
                 "--edit" => start_edit = true,
                 "--wizard" => start_wizard = true,
+                "--terminal" => start_terminal = true,
                 "--no-user" => include_user = false,
                 other if !other.starts_with('-') && workspace.is_none() => {
                     workspace = Some(PathBuf::from(other));
@@ -65,6 +69,7 @@ impl Cli {
             search,
             start_edit,
             start_wizard,
+            start_terminal,
         }
     }
 

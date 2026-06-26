@@ -50,6 +50,11 @@ fn header<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
     let mut right = row![].spacing(6).align_y(Center);
     if matches!(entry.payload, Payload::Agent(_)) {
         right = right.push(widgets::secondary_button(
+            "Run",
+            Message::RunSelectedAgent,
+            theme,
+        ));
+        right = right.push(widgets::secondary_button(
             "Edit",
             Message::EnterEditAgent,
             theme,
