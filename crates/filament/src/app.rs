@@ -271,7 +271,12 @@ impl App {
 
     /// Global UI zoom, driven by the density preference.
     pub fn scale_factor(&self) -> f32 {
-        self.prefs.density.scale()
+        // DIAGNOSTIC (blank-terminal): iced_term positions its canvas geometry at
+        // absolute layout coords; a non-1.0 global scale is a suspect for the
+        // terminal's geometry layer not appearing. Pin to 1.0 temporarily to
+        // rule the scale factor in or out. Restore `self.prefs.density.scale()`.
+        let _ = self.prefs.density.scale();
+        1.0
     }
 
     /// The root window background is fully transparent; the rounded frame in
