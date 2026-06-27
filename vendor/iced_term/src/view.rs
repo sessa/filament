@@ -584,7 +584,10 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
                     );
                 }
 
-                // Handle cursor rendering
+                // Cursor rendering. PATCH (filament): a solid block when the
+                // terminal is focused (blinking via cursor_blink_visible), and a
+                // hollow outline when it isn't — matching native terminals
+                // (Terminal.app, iTerm, Ghostty) instead of a static block.
                 if content.grid.cursor.point == indexed.point
                     && content.terminal_mode.contains(TermMode::SHOW_CURSOR)
                 {
@@ -592,7 +595,18 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
                         self.term.theme.get_color(content.cursor.fg);
                     let cursor_rect =
                         Path::rectangle(Point::new(x, y), cell_size);
-                    frame.fill(&cursor_rect, cursor_color);
+                    if state.focus {
+                        if self.term.cursor_blink_visible {
+                            frame.fill(&cursor_rect, cursor_color);
+                        }
+                    } else {
+                        frame.stroke(
+                            &cursor_rect,
+                            Stroke::default()
+                                .with_width(1.0)
+                                .with_color(cursor_color),
+                        );
+                    }
                 }
 
                 // Draw text

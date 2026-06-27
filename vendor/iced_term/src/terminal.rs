@@ -36,6 +36,9 @@ pub struct Terminal {
     pub(crate) cache: Cache,
     pub(crate) bindings: BindingsLayout,
     pub(crate) backend: backend::Backend,
+    /// Whether the focused block cursor is currently shown (driven externally
+    /// for blink animation). PATCH (filament): upstream has no cursor blink.
+    pub(crate) cursor_blink_visible: bool,
     backend_event_rx: Arc<Mutex<Receiver<AlacrittyEvent>>>,
 }
 
@@ -52,6 +55,7 @@ impl Terminal {
             theme,
             bindings: BindingsLayout::default(),
             cache: Cache::default(),
+            cursor_blink_visible: true,
             backend: backend::Backend::new(
                 id,
                 backend_event_tx,
@@ -63,6 +67,15 @@ impl Terminal {
 
     pub fn widget_id(&self) -> &iced::widget::Id {
         &self.widget_id
+    }
+
+    /// Show or hide the focused block cursor, for blink animation. Clears the
+    /// draw cache so the next frame reflects the change. PATCH (filament).
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        if self.cursor_blink_visible != visible {
+            self.cursor_blink_visible = visible;
+            self.cache.clear();
+        }
     }
 
     pub fn subscription(&self) -> Subscription<Event> {

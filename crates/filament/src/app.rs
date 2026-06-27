@@ -77,6 +77,8 @@ pub struct App {
     /// instead of silently showing nothing.
     terminal_error: Option<String>,
     next_term_id: u64,
+    /// Blink phase for the focused terminal cursor (toggled by a timer).
+    term_cursor_on: bool,
     /// Which top-level section is active.
     section: Section,
     /// Persisted app preferences (appearance, density, terminal, sessions).
@@ -108,6 +110,7 @@ pub enum Message {
 
     // terminal
     Terminal(iced_term::Event),
+    TerminalBlink,
     ToggleTerminal,
     RunSelectedAgent,
     OpenManager,
@@ -202,6 +205,7 @@ impl App {
             terminal_open: false,
             terminal_error: None,
             next_term_id: 0,
+            term_cursor_on: true,
             section: if cli.start_settings {
                 Section::Settings
             } else if cli.start_sessions {
@@ -271,12 +275,7 @@ impl App {
 
     /// Global UI zoom, driven by the density preference.
     pub fn scale_factor(&self) -> f32 {
-        // DIAGNOSTIC (blank-terminal): iced_term positions its canvas geometry at
-        // absolute layout coords; a non-1.0 global scale is a suspect for the
-        // terminal's geometry layer not appearing. Pin to 1.0 temporarily to
-        // rule the scale factor in or out. Restore `self.prefs.density.scale()`.
-        let _ = self.prefs.density.scale();
-        1.0
+        self.prefs.density.scale()
     }
 
     /// The root window background is fully transparent; the rounded frame in
@@ -296,6 +295,10 @@ impl App {
         let mut subs = vec![watcher::subscription(self.watch_roots())];
         for tab in &self.terminals {
             subs.push(tab.term.subscription().map(Message::Terminal));
+        }
+        // Blink the focused terminal cursor while the panel is showing one.
+        if self.terminal_open && self.active_tab.is_some() {
+            subs.push(blink_subscription());
         }
         subs.push(ipc_server::subscription(self.sessions.store.path.clone()));
         subs.push(poll_subscription(self.config.poll_seconds));
@@ -552,6 +555,10 @@ impl App {
             Message::Terminal(iced_term::Event::BackendCall(id, cmd)) => {
                 if let Some(tab) = self.terminals.iter_mut().find(|t| t.id == id) {
                     let action = tab.term.handle(iced_term::Command::ProxyToBackend(cmd));
+                    // Keep the cursor solid while output is flowing; the blink
+                    // timer resumes the blink once the terminal goes idle.
+                    tab.term.set_cursor_visible(true);
+                    self.term_cursor_on = true;
                     if matches!(action, iced_term::actions::Action::Shutdown) {
                         log::info!(
                             "terminal #{id} ({}) process exited — closing tab",
@@ -559,6 +566,12 @@ impl App {
                         );
                         self.close_tab(id);
                     }
+                }
+            }
+            Message::TerminalBlink => {
+                self.term_cursor_on = !self.term_cursor_on;
+                if let Some(tab) = self.active_tab.and_then(|i| self.terminals.get_mut(i)) {
+                    tab.term.set_cursor_visible(self.term_cursor_on);
                 }
             }
             Message::PollTick => {
@@ -1581,7 +1594,12 @@ impl App {
         };
         let inner: Element<Message> = match self.active_tab.and_then(|i| self.terminals.get(i)) {
             Some(tab) => container(iced_term::TerminalView::show(&tab.term).map(Message::Terminal))
-                .padding(8)
+                .padding(Padding {
+                    top: 10.0,
+                    right: 14.0,
+                    bottom: 10.0,
+                    left: 14.0,
+                })
                 .width(Fill)
                 .height(Fill)
                 .style(move |_| container::Style {
@@ -2077,6 +2095,25 @@ fn apply_automation(
         }
         Some(parts.join("; "))
     }
+}
+
+/// A ~530ms timer that emits [`Message::TerminalBlink`] to drive the focused
+/// terminal's cursor blink (a common terminal cadence).
+fn blink_subscription() -> Subscription<Message> {
+    Subscription::run_with(0u8, |_| {
+        iced::stream::channel(
+            4,
+            move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(Duration::from_millis(530));
+                    if out.try_send(Message::TerminalBlink).is_err() {
+                        break;
+                    }
+                });
+                std::future::pending::<()>().await;
+            },
+        )
+    })
 }
 
 /// A timer subscription that emits [`Message::PollTick`] every `seconds`
