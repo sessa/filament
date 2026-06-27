@@ -4,7 +4,7 @@ members = ["crates/filament-core", "crates/filament"]
 
 [workspace.package]
 edition = "2021"
-version = "0.2.0"
+version = "0.2.5"
 license = "MIT"
 rust-version = "1.94"
 repository = "https://github.com/sessa/filament"
@@ -32,3 +32,10 @@ notify-debouncer-full = "0.7"
 [profile.release]
 lto = "thin"
 strip = true
+
+# Local fork of iced_term 0.8 with a fix for the embedded (non-origin) terminal:
+# upstream bakes absolute window coords into the cached canvas geometry and
+# replays it untranslated, so glyphs are clipped away when the terminal isn't at
+# the window origin. The vendored copy draws frame-local and uses with_translation.
+[patch.crates-io]
+iced_term = { path = "vendor/iced_term" }
