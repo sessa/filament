@@ -99,3 +99,24 @@ filament set-status --session <id> paused
 
 Run `filament setup` once so Claude Code gets the `filament-workspace` skill and
 can open worktree sessions for you from an issue URL or a plain-English task.
+
+## 6. Logs
+
+Filament writes a log to your OS data dir **and** stderr on every launch:
+
+| OS | Log file |
+| --- | --- |
+| macOS | `~/Library/Application Support/dev.filament.filament/filament.log` |
+| Linux | `~/.local/share/filament/filament.log` |
+
+Default verbosity is `info` for Filament and `warn` for dependencies. To chase a
+rendering / terminal / wgpu issue, raise it:
+
+```sh
+RUST_LOG=debug /Applications/Filament.app/Contents/MacOS/filament
+```
+
+A blank terminal panel is almost always a GPU/renderer problem — the log shows
+the wgpu adapter (`Available adapters: …`), the font match for `JetBrains Mono`,
+and each terminal's lifecycle (`terminal #N opened …`, grid size, and process
+exit). If you hit it, grab `filament.log` (or the `RUST_LOG=debug` stderr).

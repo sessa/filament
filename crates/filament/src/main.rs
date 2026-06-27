@@ -13,6 +13,7 @@ mod editor;
 mod icon;
 mod inspector;
 mod ipc_server;
+mod logging;
 mod prefs;
 mod scaffold;
 mod search;
@@ -33,6 +34,18 @@ fn main() -> iced::Result {
     if let Some(code) = cli::run_subcommand() {
         std::process::exit(code);
     }
+
+    // Logging to a file (in the OS data dir) + stderr, so GUI launches leave a
+    // trace. `RUST_LOG=debug` raises verbosity for chasing render/wgpu issues.
+    let log_path = logging::init();
+    log::info!(
+        "Filament v{} starting{}",
+        env!("CARGO_PKG_VERSION"),
+        log_path
+            .as_ref()
+            .map(|p| format!(" — logging to {}", p.display()))
+            .unwrap_or_default()
+    );
 
     iced::application(App::new, App::update, App::view)
         .title(App::title)
