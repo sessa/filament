@@ -1,6 +1,7 @@
 //! Application state, messages, and the root view/update.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use iced::widget::{
     button, column, container, markdown, row, rule, scrollable, space, text, text_editor,
@@ -11,20 +12,21 @@ use iced::{
 };
 
 use filament_core::{
-    github, session, Entry, GhError, ItemId, ItemKind, NewSession, SessionStore, Workspace,
+    git, github, session, Entry, GhError, ItemId, ItemKind, NewSession, SessionStore, Workspace,
 };
 
 use crate::cli::Cli;
+use crate::prefs::{PrefMsg, Prefs};
 use crate::sessions::{self, SessionMsg};
 use crate::theme as th;
-use crate::{editor, icon, inspector, sidebar, terminal, watcher, widgets, wizard};
+use crate::{editor, icon, inspector, settingsview, sidebar, terminal, watcher, widgets, wizard};
 
-/// Which top-level section is shown: the config dashboard or the worktree
-/// session manager.
+/// Which top-level section is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     Config,
     Sessions,
+    Settings,
 }
 
 /// What the right-hand pane is doing. The editor states are boxed because they
@@ -53,10 +55,13 @@ pub struct App {
     /// The integrated terminal (lazily created); kept alive across hide/show.
     terminal: Option<iced_term::Terminal>,
     terminal_open: bool,
+    /// A short label describing what the terminal is running / where.
+    terminal_label: String,
     next_term_id: u64,
-    dark: bool,
     /// Which top-level section is active.
     section: Section,
+    /// Persisted app preferences (appearance, density, terminal, sessions).
+    prefs: Prefs,
     /// The worktree-backed session manager (crow-style workflow).
     sessions: sessions::SessionsState,
 }
@@ -75,6 +80,7 @@ pub enum Message {
     // sections
     SwitchSection(Section),
     Sessions(SessionMsg),
+    Pref(PrefMsg),
 
     // terminal
     Terminal(iced_term::Event),
@@ -99,7 +105,18 @@ impl App {
     pub fn new() -> (App, Task<Message>) {
         let cli = Cli::from_env();
         let workspace = Workspace::load(cli.options());
-        let sessions = sessions::SessionsState::load(cli.workspace.clone());
+        let prefs = Prefs::load();
+
+        // Resolve the active repository: prefer a saved default repo, else the
+        // launch workspace *only if it is actually a git repo*. (Launched from a
+        // GUI, the working directory is often `/`, which is not a repo — never
+        // treat that as one.)
+        let repo_hint = prefs
+            .default_repo
+            .clone()
+            .filter(|p| git::repo_root(p).is_some())
+            .or_else(|| cli.workspace.clone());
+        let sessions = sessions::SessionsState::load(repo_hint, prefs.show_all_sessions);
 
         let mut app = App {
             workspace,
@@ -110,13 +127,16 @@ impl App {
             mode: Mode::Inspect,
             terminal: None,
             terminal_open: false,
+            terminal_label: String::new(),
             next_term_id: 0,
-            dark: true,
-            section: if cli.start_sessions {
+            section: if cli.start_settings {
+                Section::Settings
+            } else if cli.start_sessions {
                 Section::Sessions
             } else {
                 Section::Config
             },
+            prefs,
             sessions,
         };
         app.selection = cli
@@ -158,28 +178,31 @@ impl App {
         }
         if cli.start_terminal {
             let cwd = app.workspace.options.workspace.clone();
-            app.open_terminal(terminal::shell_settings(cwd));
+            app.open_shell(cwd);
         }
 
         (app, Task::none())
     }
 
     pub fn title(&self) -> String {
-        "Filament — Claude Code Config".to_string()
+        "Filament — Claude Code".to_string()
     }
 
     pub fn theme(&self) -> Theme {
-        if self.dark {
-            Theme::TokyoNight
-        } else {
-            Theme::Light
-        }
+        th::build(self.prefs.theme, self.prefs.accent)
     }
 
-    /// The root window background — translucent so OS blur shows through.
+    /// Global UI zoom, driven by the density preference.
+    pub fn scale_factor(&self) -> f32 {
+        self.prefs.density.scale()
+    }
+
+    /// The root window background is fully transparent; the rounded frame in
+    /// `view` paints the warm glass surface so the window has soft corners and
+    /// OS blur shows through outside them.
     pub fn app_style(&self, theme: &Theme) -> iced::theme::Style {
         iced::theme::Style {
-            background_color: th::app_background(theme),
+            background_color: Color::TRANSPARENT,
             text_color: theme.palette().text,
         }
     }
@@ -194,15 +217,37 @@ impl App {
         }
     }
 
+    fn term_opts(&self) -> terminal::TermOpts {
+        terminal::TermOpts {
+            dark: self.prefs.theme.is_dark(),
+            font_size: self.prefs.terminal_font_size,
+        }
+    }
+
+    /// Launch `claude` in `cwd`.
+    fn open_claude(&mut self, cwd: Option<PathBuf>) {
+        let label = label_for("claude", cwd.as_deref());
+        let settings = terminal::agent_settings(cwd, self.term_opts());
+        self.open_terminal(settings, label);
+    }
+
+    /// Launch a plain shell in `cwd`.
+    fn open_shell(&mut self, cwd: Option<PathBuf>) {
+        let label = label_for("shell", cwd.as_deref());
+        let settings = terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
+        self.open_terminal(settings, label);
+    }
+
     /// Create (or replace) the integrated terminal with the given settings and
     /// reveal the panel. Replacing an existing terminal ends its session.
-    fn open_terminal(&mut self, settings: iced_term::settings::Settings) {
+    fn open_terminal(&mut self, settings: iced_term::settings::Settings, label: String) {
         let id = self.next_term_id;
         self.next_term_id += 1;
         match iced_term::Terminal::new(id, settings) {
             Ok(term) => {
                 self.terminal = Some(term);
                 self.terminal_open = true;
+                self.terminal_label = label;
             }
             Err(_) => {
                 self.terminal = None;
@@ -258,7 +303,14 @@ impl App {
             Message::SetKindFilter(kind) => {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
-            Message::ToggleTheme => self.dark = !self.dark,
+            Message::ToggleTheme => {
+                self.prefs.theme = if self.prefs.theme.is_dark() {
+                    crate::prefs::ThemeMode::Light
+                } else {
+                    crate::prefs::ThemeMode::Dark
+                };
+                self.prefs.save();
+            }
             Message::Rescan | Message::FsChanged => self.rescan(),
 
             Message::Noop => {}
@@ -277,18 +329,19 @@ impl App {
                 }
             }
             Message::Sessions(msg) => return self.update_sessions(msg),
+            Message::Pref(msg) => self.update_prefs(msg),
 
             Message::ToggleTerminal => {
                 if self.terminal.is_some() {
                     self.terminal_open = !self.terminal_open;
                 } else {
-                    let cwd = self.workspace.options.workspace.clone();
-                    self.open_terminal(terminal::shell_settings(cwd));
+                    let cwd = self.active_cwd();
+                    self.open_shell(cwd);
                 }
             }
             Message::RunSelectedAgent => {
-                let cwd = self.workspace.options.workspace.clone();
-                self.open_terminal(terminal::agent_settings(cwd));
+                let cwd = self.active_cwd();
+                self.open_claude(cwd);
             }
             Message::Terminal(iced_term::Event::BackendCall(_, cmd)) => {
                 if let Some(term) = &mut self.terminal {
@@ -339,6 +392,30 @@ impl App {
             Message::WizardCreate => self.create_from_wizard(),
         }
         Task::none()
+    }
+
+    /// The working directory the terminal / Run actions should default to: the
+    /// active repo when one is selected, else the launch workspace.
+    fn active_cwd(&self) -> Option<PathBuf> {
+        self.sessions
+            .repo_root
+            .clone()
+            .or_else(|| self.workspace.options.workspace.clone())
+    }
+
+    fn update_prefs(&mut self, msg: PrefMsg) {
+        match msg {
+            PrefMsg::SetTheme(m) => self.prefs.theme = m,
+            PrefMsg::SetAccent(a) => self.prefs.accent = a,
+            PrefMsg::SetDensity(d) => self.prefs.density = d,
+            PrefMsg::TermFontDelta(delta) => self.prefs.bump_terminal_font(delta),
+            PrefMsg::ShellChanged(s) => self.prefs.shell = s,
+            PrefMsg::ToggleShowAll(v) => {
+                self.prefs.show_all_sessions = v;
+                self.sessions.show_all = v;
+            }
+        }
+        self.prefs.save();
     }
 
     fn save_edit(&mut self) {
@@ -463,13 +540,13 @@ impl App {
             SessionMsg::OpenAgent(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id);
-                    self.open_terminal(terminal::agent_settings(Some(cwd)));
+                    self.open_claude(Some(cwd));
                 }
             }
             SessionMsg::OpenShell(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id);
-                    self.open_terminal(terminal::shell_settings(Some(cwd)));
+                    self.open_shell(Some(cwd));
                 }
             }
             SessionMsg::Delete(id) => return self.delete_session(id),
@@ -496,8 +573,32 @@ impl App {
                 self.sessions.busy = None;
             }
             SessionMsg::OpenUrl(url) => open_url(&url),
+            SessionMsg::RepoInputChanged(v) => self.sessions.repo_input = v,
+            SessionMsg::OpenRepo => {
+                let path = self.sessions.repo_input.trim().to_string();
+                if !path.is_empty() {
+                    self.set_active_repo(PathBuf::from(path));
+                }
+            }
+            SessionMsg::SetRepo(path) => self.set_active_repo(path),
         }
         Task::none()
+    }
+
+    /// Point the Sessions board at `path` (resolved to its git root), persist it
+    /// as the default repo, and recompute repo-derived state.
+    fn set_active_repo(&mut self, path: PathBuf) {
+        match git::repo_root(&path) {
+            Some(root) => {
+                self.sessions.set_repo(Some(root.clone()));
+                self.prefs.default_repo = Some(root);
+                self.prefs.save();
+                self.sessions.error = None;
+            }
+            None => {
+                self.sessions.error = Some(format!("Not a git repository: {}", path.display()));
+            }
+        }
     }
 
     fn create_session(&mut self) -> Task<Message> {
@@ -667,15 +768,18 @@ impl App {
         let detail: Element<Message> = match self.section {
             Section::Config => match &self.mode {
                 Mode::Inspect => self.detail(),
-                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(24))
+                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(20))
                     .height(Fill)
                     .into(),
-                Mode::EditSource(st) => container(st.view(&theme)).padding(24).height(Fill).into(),
-                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(24))
+                Mode::EditSource(st) => container(st.view(&theme)).padding(20).height(Fill).into(),
+                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(20))
                     .height(Fill)
                     .into(),
             },
             Section::Sessions => self.sessions.detail(&theme),
+            Section::Settings => {
+                settingsview::view(&self.prefs, &theme, self.sessions.repo_root.as_deref())
+            }
         };
 
         // Right pane: the detail/editor in a glass panel, terminal docked below.
@@ -691,7 +795,7 @@ impl App {
                     detail_panel,
                     container(self.terminal_panel(term, &theme)).height(Length::FillPortion(2)),
                 ]
-                .spacing(12)
+                .spacing(10)
                 .into()
             } else {
                 detail_panel.into()
@@ -709,9 +813,10 @@ impl App {
                     &self.search,
                     self.kind_filter,
                 ),
-                300.0,
+                288.0,
             ),
-            Section::Sessions => (self.sessions.sidebar(&theme), 340.0),
+            Section::Sessions => (self.sessions.sidebar(&theme), 332.0),
+            Section::Settings => (settingsview::sidebar(&theme), 288.0),
         };
         let sidebar_panel = container(sidebar_inner)
             .width(Length::Fixed(sidebar_width))
@@ -719,12 +824,29 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let body = row![sidebar_panel, right_pane].spacing(12).height(Fill);
+        let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
 
-        column![self.header(&theme), body]
-            .spacing(12)
-            .padding(12)
+        let content = column![self.header(&theme), body]
+            .spacing(10)
+            .padding(10)
+            .height(Fill);
+
+        // Rounded glass frame: the visible "window", with soft corners over the
+        // OS blur outside the radius.
+        let frame_bg = th::app_background(&theme);
+        let frame_border = th::hairline(&theme);
+        container(content)
+            .width(Fill)
             .height(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(frame_bg)),
+                border: Border {
+                    color: frame_border,
+                    width: 1.0,
+                    radius: 16.0.into(),
+                },
+                ..container::Style::default()
+            })
             .into()
     }
 
@@ -738,6 +860,11 @@ impl App {
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
         let shadow = th::card_shadow();
+        let label = if self.terminal_label.is_empty() {
+            "Terminal".to_string()
+        } else {
+            self.terminal_label.clone()
+        };
 
         let bar = container(
             row![
@@ -746,8 +873,8 @@ impl App {
                     .style(move |_: &Theme| text::Style {
                         color: Some(accent)
                     }),
-                text("Terminal")
-                    .size(12)
+                text(label)
+                    .size(th::TEXT_META)
                     .style(move |_| text::Style { color: Some(muted) }),
                 space().width(Fill),
                 widgets::icon_only(icon::CLOSE, Message::ToggleTerminal, theme),
@@ -776,7 +903,7 @@ impl App {
                 border: Border {
                     color: bdr,
                     width: 1.0,
-                    radius: 16.0.into(),
+                    radius: th::RADIUS_PANEL.into(),
                 },
                 shadow,
                 ..container::Style::default()
@@ -784,13 +911,13 @@ impl App {
             .into()
     }
 
-    /// The segmented Config / Sessions switcher shown in the header.
+    /// The segmented Config / Sessions / Settings switcher shown in the header.
     fn section_toggle<'a>(&self, theme: &Theme) -> Element<'a, Message> {
         let seg = |glyph: char, label: &'static str, section: Section, active: bool| {
             let primary = theme.palette().primary;
             let txt = theme.palette().text;
             button(
-                row![icon::icon(glyph).size(13), text(label).size(12)]
+                row![icon::icon(glyph).size(13), text(label).size(th::TEXT_UI)]
                     .spacing(6)
                     .align_y(Center),
             )
@@ -804,7 +931,7 @@ impl App {
             .style(move |_t, status| {
                 let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
                 let (bg, fg) = if active {
-                    (th::with_alpha(primary, 0.28), txt)
+                    (th::with_alpha(primary, 0.22), txt)
                 } else if hovered {
                     (th::with_alpha(txt, 0.10), txt)
                 } else {
@@ -834,6 +961,12 @@ impl App {
                     Section::Sessions,
                     self.section == Section::Sessions
                 ),
+                seg(
+                    icon::SETTINGS,
+                    "Settings",
+                    Section::Settings,
+                    self.section == Section::Settings
+                ),
             ]
             .spacing(2),
         )
@@ -858,7 +991,11 @@ impl App {
             .unwrap_or_default();
 
         let theme_toggle = widgets::icon_only(
-            if self.dark { icon::SUN } else { icon::MOON },
+            if self.prefs.theme.is_dark() {
+                icon::SUN
+            } else {
+                icon::MOON
+            },
             Message::ToggleTheme,
             theme,
         );
@@ -882,6 +1019,10 @@ impl App {
                     Message::Sessions(SessionMsg::Refresh),
                     theme,
                 ));
+                right = right.push(terminal_button);
+                right = right.push(theme_toggle);
+            }
+            Section::Settings => {
                 right = right.push(terminal_button);
                 right = right.push(theme_toggle);
             }
@@ -948,16 +1089,16 @@ impl App {
 
         let bar = row![
             icon::icon(icon::AGENT)
-                .size(18)
+                .size(17)
                 .style(move |_: &Theme| text::Style {
                     color: Some(accent)
                 }),
-            text("Filament").size(18),
+            text("Filament").size(th::TEXT_TITLE),
             space().width(12.0),
             self.section_toggle(theme),
             space().width(10.0),
             text(workspace)
-                .size(12)
+                .size(th::TEXT_META)
                 .style(move |_| text::Style { color: Some(muted) }),
             space().width(Fill),
             right,
@@ -967,9 +1108,9 @@ impl App {
 
         container(bar)
             .padding(Padding {
-                top: 10.0,
+                top: 9.0,
                 right: 12.0,
-                bottom: 10.0,
+                bottom: 9.0,
                 left: 14.0,
             })
             .style(widgets::panel(theme))
@@ -987,7 +1128,7 @@ impl App {
         let muted = th::muted(&self.theme());
         container(
             text("Select an item to inspect")
-                .size(15)
+                .size(th::TEXT_BODY)
                 .style(move |_| text::Style { color: Some(muted) }),
         )
         .center_x(Fill)
@@ -1014,6 +1155,14 @@ impl App {
                 self.previews.insert(id, content);
             }
         }
+    }
+}
+
+/// A short label for the terminal header: `program · dirname`.
+fn label_for(program: &str, cwd: Option<&std::path::Path>) -> String {
+    match cwd.and_then(|p| p.file_name()).map(|s| s.to_string_lossy()) {
+        Some(name) => format!("{program} · {name}"),
+        None => program.to_string(),
     }
 }
 

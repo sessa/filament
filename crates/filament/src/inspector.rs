@@ -41,10 +41,10 @@ fn header<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
     if let Some(c) = entry.color() {
         left = left.push(widgets::swatch(th::agent_color(c), 16.0));
     }
-    left = left.push(text(entry.name.clone()).size(24));
+    left = left.push(text(entry.name.clone()).size(th::TEXT_H1));
     left = left.push(
         text(entry.kind.label())
-            .size(13)
+            .size(th::TEXT_META)
             .style(move |_| text::Style { color: Some(muted) }),
     );
 
@@ -86,16 +86,17 @@ fn header<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
 fn description<'a>(text_value: String, theme: &Theme) -> Element<'a, Message> {
     let muted = th::muted(theme);
     text(text_value)
-        .size(14)
+        .size(th::TEXT_BODY)
         .style(move |_| text::Style { color: Some(muted) })
         .into()
 }
 
 fn source_line<'a>(entry: &'a Entry, theme: &Theme) -> Element<'a, Message> {
-    let muted = th::muted(theme);
+    let faint = th::faint(theme);
     text(entry.source_path.display().to_string())
-        .size(11)
-        .style(move |_| text::Style { color: Some(muted) })
+        .size(th::TEXT_LABEL)
+        .font(Font::MONOSPACE)
+        .style(move |_| text::Style { color: Some(faint) })
         .into()
 }
 
@@ -106,7 +107,7 @@ fn render_markdown<'a>(content: &'a markdown::Content, theme: &Theme) -> Element
 
 fn mono<'a>(value: String, color: Color) -> Element<'a, Message> {
     text(value)
-        .size(12)
+        .size(th::TEXT_META)
         .font(Font::MONOSPACE)
         .style(move |_| text::Style { color: Some(color) })
         .into()
@@ -385,7 +386,7 @@ fn perm_group<'a>(label: &'a str, items: &'a [String], color: Color) -> Element<
         .collect();
     column![
         text(label)
-            .size(11)
+            .size(th::TEXT_LABEL)
             .style(move |_| text::Style { color: Some(color) }),
         widgets::wrapped(chips, 3),
     ]
@@ -399,12 +400,12 @@ fn hooks_view<'a>(groups: Vec<HookEventGroup>, theme: &Theme) -> Element<'a, Mes
     let mut col = column![].spacing(12);
     for group in groups {
         let mut block = column![].spacing(4);
-        block = block.push(text(group.event).size(13));
+        block = block.push(text(group.event).size(th::TEXT_UI));
         for matcher in group.matchers {
             if let Some(m) = matcher.matcher {
                 block = block.push(
                     text(format!("matcher: {m}"))
-                        .size(12)
+                        .size(th::TEXT_META)
                         .style(move |_| text::Style { color: Some(muted) }),
                 );
             }
@@ -426,7 +427,8 @@ fn invalid_view<'a>(entry: &'a Entry, err: &'a ParseError, theme: &Theme) -> Ele
     content = content.push(widgets::card(
         "Parse error",
         text(err.to_string())
-            .size(13)
+            .size(th::TEXT_BODY)
+            .font(Font::MONOSPACE)
             .style(move |_| text::Style {
                 color: Some(danger),
             })
@@ -469,9 +471,9 @@ fn kv_rows<'a>(
         col = col.push(
             row![
                 text(k.clone())
-                    .size(12)
+                    .size(th::TEXT_META)
                     .style(move |_| text::Style { color: Some(muted) })
-                    .width(Length::Fixed(170.0)),
+                    .width(Length::Fixed(160.0)),
                 mono(v.clone(), fg),
             ]
             .spacing(8),

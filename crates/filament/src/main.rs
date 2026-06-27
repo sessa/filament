@@ -12,8 +12,10 @@ mod cli;
 mod editor;
 mod icon;
 mod inspector;
+mod prefs;
 mod search;
 mod sessions;
+mod settingsview;
 mod sidebar;
 mod terminal;
 mod theme;
@@ -28,6 +30,7 @@ fn main() -> iced::Result {
         .title(App::title)
         .theme(App::theme)
         .style(App::app_style)
+        .scale_factor(App::scale_factor)
         .subscription(App::subscription)
         .font(include_bytes!("../assets/fonts/Inter.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice())
@@ -35,7 +38,7 @@ fn main() -> iced::Result {
         .default_font(iced::Font::with_name("Inter"))
         .window(iced::window::Settings {
             size: iced::Size::new(1240.0, 820.0),
-            min_size: Some(iced::Size::new(860.0, 560.0)),
+            min_size: Some(iced::Size::new(880.0, 580.0)),
             transparent: true,
             blur: true,
             ..Default::default()

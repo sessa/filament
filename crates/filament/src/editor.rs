@@ -493,13 +493,13 @@ fn field<'a>(
     let danger = th::danger();
     let mut col = column![
         text(label)
-            .size(11)
+            .size(th::TEXT_LABEL)
             .style(move |_| text::Style { color: Some(muted) }),
         input,
     ]
     .spacing(4);
     if let Some(err) = error {
-        col = col.push(text(err).size(11).style(move |_| text::Style {
+        col = col.push(text(err).size(th::TEXT_LABEL).style(move |_| text::Style {
             color: Some(danger),
         }));
     }
@@ -509,7 +509,7 @@ fn field<'a>(
 fn editor_title<'a>(title: &str, theme: &Theme) -> Element<'a, Message> {
     let muted = th::muted(theme);
     text(title.to_string())
-        .size(15)
+        .size(th::TEXT_BODY)
         .style(move |_| text::Style { color: Some(muted) })
         .into()
 }
@@ -518,7 +518,7 @@ fn status_line<'a>(status: &str, theme: &Theme) -> Element<'a, Message> {
     let danger = th::danger();
     let _ = theme;
     text(status.to_string())
-        .size(12)
+        .size(th::TEXT_META)
         .style(move |_| text::Style {
             color: Some(danger),
         })
