@@ -6,6 +6,7 @@
 //! settings for either a plain shell or a Claude Code session, themed to match
 //! the app (warm palette, JetBrains Mono) and honoring the user's font size.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use iced::Font;
@@ -76,10 +77,100 @@ fn settings(program: String, args: Vec<String>, cwd: Option<PathBuf>, opts: Term
         backend: BackendSettings {
             program,
             args,
+            env: child_env(),
             working_directory: cwd,
-            ..Default::default()
         },
     }
+}
+
+/// Extra environment for spawned terminals. The key one is an augmented `PATH`
+/// (see [`augmented_path`]) so `claude` / `git` / `gh` resolve even when Filament
+/// is launched from a GUI (Finder, the dock), where the inherited `PATH` is the
+/// bare launchd default and excludes Homebrew / npm / Cargo bin dirs — the cause
+/// of "Failed to spawn command 'claude': No such file or directory".
+fn child_env() -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    #[cfg(unix)]
+    env.insert("PATH".to_string(), augmented_path());
+    env
+}
+
+/// A `PATH` that unions, in priority order: the current process `PATH`, the login
+/// shell's `PATH` (so nvm / asdf / Homebrew setups are honored), and a set of
+/// well-known bin dirs GUI-launched apps usually miss. Computed once and cached.
+#[cfg(unix)]
+fn augmented_path() -> String {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(build_path).clone()
+}
+
+#[cfg(unix)]
+fn build_path() -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let add = |raw: &str, parts: &mut Vec<String>| {
+        for seg in raw.split(':') {
+            let seg = seg.trim();
+            if !seg.is_empty() && !parts.iter().any(|p| p == seg) {
+                parts.push(seg.to_string());
+            }
+        }
+    };
+
+    if let Ok(p) = std::env::var("PATH") {
+        add(&p, &mut parts);
+    }
+    if let Some(p) = login_shell_path() {
+        add(&p, &mut parts);
+    }
+
+    let mut well_known: Vec<String> = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Ok(home) = std::env::var("HOME") {
+        for rel in [
+            ".local/bin",
+            ".npm-global/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".volta/bin",
+            ".deno/bin",
+            "go/bin",
+        ] {
+            well_known.push(format!("{home}/{rel}"));
+        }
+    }
+    for dir in &well_known {
+        add(dir, &mut parts);
+    }
+
+    parts.join(":")
+}
+
+/// Ask the user's login shell for its `PATH` (sourcing their profile/rc), so
+/// tools installed via shell-managed version managers are visible. Best effort;
+/// `printf %s` writes no trailing newline, so any rc chatter is on earlier lines
+/// and we take only the last line.
+#[cfg(unix)]
+fn login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
+    let output = std::process::Command::new(shell)
+        .args(["-lic", "printf %s \"$PATH\""])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = stdout.rsplit('\n').next().unwrap_or("").trim().to_string();
+    (!path.is_empty()).then_some(path)
 }
 
 fn default_shell() -> String {
@@ -158,5 +249,30 @@ fn palette(dark: bool) -> ColorPalette {
             dim_cyan: s("#337373"),
             dim_white: s("#6B675E"),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn augmented_path_includes_well_known_dirs_and_dedups() {
+        let path = build_path();
+        let segs: Vec<&str> = path.split(':').collect();
+        // Well-known GUI-missing dirs are present.
+        assert!(
+            segs.contains(&"/usr/local/bin"),
+            "missing /usr/local/bin: {path}"
+        );
+        assert!(segs.contains(&"/usr/bin"), "missing /usr/bin: {path}");
+        // No duplicate segments.
+        let mut sorted = segs.clone();
+        sorted.sort_unstable();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(before, sorted.len(), "duplicate PATH segments: {path}");
+        // The child env carries the augmented PATH.
+        assert_eq!(child_env().get("PATH"), Some(&path));
     }
 }
