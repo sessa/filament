@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use iced::widget::{
-    button, column, container, markdown, row, rule, scrollable, space, text, text_editor,
-};
+use iced::widget::{button, column, container, markdown, row, rule, space, text, text_editor};
 use iced::{
     border, Background, Border, Center, Color, Element, Fill, Length, Padding, Shadow,
     Subscription, Task, Theme,
@@ -57,6 +55,9 @@ pub struct App {
     terminal_open: bool,
     /// A short label describing what the terminal is running / where.
     terminal_label: String,
+    /// Set when the terminal failed to launch, so the panel can explain why
+    /// instead of silently showing nothing.
+    terminal_error: Option<String>,
     next_term_id: u64,
     /// Which top-level section is active.
     section: Section,
@@ -128,6 +129,7 @@ impl App {
             terminal: None,
             terminal_open: false,
             terminal_label: String::new(),
+            terminal_error: None,
             next_term_id: 0,
             section: if cli.start_settings {
                 Section::Settings
@@ -176,12 +178,14 @@ impl App {
                 app.mode = Mode::EditAgent(Box::new(st));
             }
         }
-        if cli.start_terminal {
+        let startup = if cli.start_terminal {
             let cwd = app.workspace.options.workspace.clone();
-            app.open_shell(cwd);
-        }
+            app.open_shell(cwd)
+        } else {
+            Task::none()
+        };
 
-        (app, Task::none())
+        (app, startup)
     }
 
     pub fn title(&self) -> String {
@@ -225,33 +229,48 @@ impl App {
     }
 
     /// Launch `claude` in `cwd`.
-    fn open_claude(&mut self, cwd: Option<PathBuf>) {
+    fn open_claude(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
+        let cwd = usable_cwd(cwd);
         let label = label_for("claude", cwd.as_deref());
         let settings = terminal::agent_settings(cwd, self.term_opts());
-        self.open_terminal(settings, label);
+        self.open_terminal(settings, label)
     }
 
     /// Launch a plain shell in `cwd`.
-    fn open_shell(&mut self, cwd: Option<PathBuf>) {
+    fn open_shell(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
+        let cwd = usable_cwd(cwd);
         let label = label_for("shell", cwd.as_deref());
         let settings = terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
-        self.open_terminal(settings, label);
+        self.open_terminal(settings, label)
     }
 
     /// Create (or replace) the integrated terminal with the given settings and
-    /// reveal the panel. Replacing an existing terminal ends its session.
-    fn open_terminal(&mut self, settings: iced_term::settings::Settings, label: String) {
+    /// reveal the panel. Replacing an existing terminal ends its session. On
+    /// success the new terminal is focused so the user can type immediately
+    /// (which also drives its first resize/render); on failure the panel stays
+    /// open to show why, instead of silently showing nothing.
+    fn open_terminal(
+        &mut self,
+        settings: iced_term::settings::Settings,
+        label: String,
+    ) -> Task<Message> {
         let id = self.next_term_id;
         self.next_term_id += 1;
         match iced_term::Terminal::new(id, settings) {
             Ok(term) => {
+                let widget_id = term.widget_id().clone();
                 self.terminal = Some(term);
                 self.terminal_open = true;
                 self.terminal_label = label;
+                self.terminal_error = None;
+                iced_term::TerminalView::focus(widget_id)
             }
-            Err(_) => {
+            Err(e) => {
                 self.terminal = None;
-                self.terminal_open = false;
+                self.terminal_open = true;
+                self.terminal_label = label;
+                self.terminal_error = Some(format!("Couldn't start the terminal: {e}"));
+                Task::none()
             }
         }
     }
@@ -304,11 +323,7 @@ impl App {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => {
-                self.prefs.theme = if self.prefs.theme.is_dark() {
-                    crate::prefs::ThemeMode::Light
-                } else {
-                    crate::prefs::ThemeMode::Dark
-                };
+                self.prefs.theme = self.prefs.theme.next();
                 self.prefs.save();
             }
             Message::Rescan | Message::FsChanged => self.rescan(),
@@ -332,16 +347,21 @@ impl App {
             Message::Pref(msg) => self.update_prefs(msg),
 
             Message::ToggleTerminal => {
-                if self.terminal.is_some() {
-                    self.terminal_open = !self.terminal_open;
+                if self.terminal_open {
+                    // Visible (a live terminal or an error notice) → hide it.
+                    self.terminal_open = false;
+                } else if self.terminal.is_some() {
+                    // Hidden but still alive → reveal it.
+                    self.terminal_open = true;
                 } else {
+                    // Nothing yet (or a prior launch failed) → start a shell.
                     let cwd = self.active_cwd();
-                    self.open_shell(cwd);
+                    return self.open_shell(cwd);
                 }
             }
             Message::RunSelectedAgent => {
                 let cwd = self.active_cwd();
-                self.open_claude(cwd);
+                return self.open_claude(cwd);
             }
             Message::Terminal(iced_term::Event::BackendCall(_, cmd)) => {
                 if let Some(term) = &mut self.terminal {
@@ -540,13 +560,13 @@ impl App {
             SessionMsg::OpenAgent(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id);
-                    self.open_claude(Some(cwd));
+                    return self.open_claude(Some(cwd));
                 }
             }
             SessionMsg::OpenShell(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id);
-                    self.open_shell(Some(cwd));
+                    return self.open_shell(Some(cwd));
                 }
             }
             SessionMsg::Delete(id) => return self.delete_session(id),
@@ -578,6 +598,24 @@ impl App {
                 let path = self.sessions.repo_input.trim().to_string();
                 if !path.is_empty() {
                     self.set_active_repo(PathBuf::from(path));
+                }
+            }
+            SessionMsg::BrowseRepo => {
+                // The native folder picker is modal; it runs on this (main) thread
+                // and blocks until the user chooses or cancels.
+                let start = self
+                    .sessions
+                    .repo_root
+                    .clone()
+                    .or_else(|| self.active_cwd())
+                    .filter(|p| p.is_dir());
+                let mut dialog = rfd::FileDialog::new().set_title("Open a git repository");
+                if let Some(dir) = start {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(path) = dialog.pick_folder() {
+                    self.sessions.repo_input = path.display().to_string();
+                    self.set_active_repo(path);
                 }
             }
             SessionMsg::SetRepo(path) => self.set_active_repo(path),
@@ -768,13 +806,16 @@ impl App {
         let detail: Element<Message> = match self.section {
             Section::Config => match &self.mode {
                 Mode::Inspect => self.detail(),
-                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(20))
+                Mode::EditAgent(st) => {
+                    widgets::scroll(container(st.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
+                Mode::EditSource(st) => container(st.view(&theme))
+                    .padding(th::PAD_PANE)
                     .height(Fill)
                     .into(),
-                Mode::EditSource(st) => container(st.view(&theme)).padding(20).height(Fill).into(),
-                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(20))
-                    .height(Fill)
-                    .into(),
+                Mode::Wizard(w) => {
+                    widgets::scroll(container(w.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
             },
             Section::Sessions => self.sessions.detail(&theme),
             Section::Settings => {
@@ -789,19 +830,26 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let right_pane: Element<Message> = if self.terminal_open {
+        let docked: Option<Element<Message>> = if self.terminal_open {
             if let Some(term) = &self.terminal {
-                column![
-                    detail_panel,
-                    container(self.terminal_panel(term, &theme)).height(Length::FillPortion(2)),
-                ]
-                .spacing(10)
-                .into()
+                Some(self.terminal_panel(term, &theme))
             } else {
-                detail_panel.into()
+                self.terminal_error
+                    .as_deref()
+                    .map(|err| self.terminal_error_panel(err, &theme))
             }
         } else {
-            detail_panel.into()
+            None
+        };
+
+        let right_pane: Element<Message> = match docked {
+            Some(panel) => column![
+                detail_panel,
+                container(panel).height(Length::FillPortion(2)),
+            ]
+            .spacing(th::GAP_PANEL)
+            .into(),
+            None => detail_panel.into(),
         };
 
         let (sidebar_inner, sidebar_width) = match self.section {
@@ -824,7 +872,9 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
+        let body = row![sidebar_panel, right_pane]
+            .spacing(th::GAP_PANEL)
+            .height(Fill);
 
         // On macOS the header is flush with the top (it doubles as the title
         // bar), so the body sits below a hairline divider and is inset on its
@@ -834,14 +884,17 @@ impl App {
             column![
                 self.header(&theme),
                 rule::horizontal(1),
-                container(body).width(Fill).height(Fill).padding(10),
+                container(body)
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(th::GAP_PANEL),
             ]
             .width(Fill)
             .height(Fill)
         } else {
             column![self.header(&theme), body]
-                .spacing(10)
-                .padding(10)
+                .spacing(th::GAP_PANEL)
+                .padding(th::GAP_PANEL)
                 .height(Fill)
         };
 
@@ -873,7 +926,7 @@ impl App {
         let accent = theme.palette().primary;
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
-        let shadow = th::card_shadow();
+        let shadow = th::panel_shadow();
         let label = if self.terminal_label.is_empty() {
             "Terminal".to_string()
         } else {
@@ -910,6 +963,64 @@ impl App {
             .height(Fill);
 
         container(column![bar, rule::horizontal(1), view].height(Fill))
+            .clip(true)
+            .height(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg)),
+                border: Border {
+                    color: bdr,
+                    width: 1.0,
+                    radius: th::RADIUS_PANEL.into(),
+                },
+                shadow,
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    /// Shown in place of the terminal when a launch fails, so the failure is
+    /// visible (and dismissable) rather than an empty panel.
+    fn terminal_error_panel<'a>(&'a self, err: &'a str, theme: &Theme) -> Element<'a, Message> {
+        let muted = th::muted(theme);
+        let danger = theme.palette().danger;
+        let bg = th::surface_strong(theme);
+        let bdr = th::hairline(theme);
+        let shadow = th::panel_shadow();
+
+        let bar = container(
+            row![
+                icon::icon(icon::WARNING)
+                    .size(13)
+                    .style(move |_: &Theme| text::Style {
+                        color: Some(danger)
+                    }),
+                text("Terminal")
+                    .size(th::TEXT_META)
+                    .style(move |_| text::Style { color: Some(muted) }),
+                space().width(Fill),
+                widgets::icon_only(icon::CLOSE, Message::ToggleTerminal, theme),
+            ]
+            .align_y(Center)
+            .spacing(8),
+        )
+        .padding(Padding {
+            top: 5.0,
+            right: 6.0,
+            bottom: 5.0,
+            left: 12.0,
+        })
+        .width(Fill);
+
+        let body = container(
+            text(err)
+                .size(th::TEXT_BODY)
+                .style(move |_| text::Style { color: Some(muted) }),
+        )
+        .padding(16)
+        .width(Fill)
+        .height(Fill);
+
+        container(column![bar, rule::horizontal(1), body].height(Fill))
             .clip(true)
             .height(Fill)
             .style(move |_| container::Style {
@@ -1004,15 +1115,13 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
-        let theme_toggle = widgets::icon_only(
-            if self.prefs.theme.is_dark() {
-                icon::SUN
-            } else {
-                icon::MOON
-            },
-            Message::ToggleTheme,
-            theme,
-        );
+        // Cycles Dark → Light → Ayu; the glyph shows the active theme.
+        let theme_glyph = match self.prefs.theme {
+            crate::prefs::ThemeMode::Dark => icon::MOON,
+            crate::prefs::ThemeMode::Light => icon::SUN,
+            crate::prefs::ThemeMode::Ayu => icon::PALETTE,
+        };
+        let theme_toggle = widgets::icon_only(theme_glyph, Message::ToggleTheme, theme);
         let terminal_button = widgets::icon_button(
             icon::TERMINAL,
             if self.terminal_open {
@@ -1201,6 +1310,21 @@ impl App {
             }
         }
     }
+}
+
+/// Pick a working directory the terminal can actually start in.
+///
+/// A stale or missing path (e.g. a deleted worktree, or `/` from a GUI launch)
+/// makes the child shell fail to start — which looks like "nothing shows up in
+/// the shell". Fall back to the user's home directory, then to the process
+/// default (`None`), so a terminal always opens somewhere valid.
+fn usable_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(dir) = cwd.filter(|p| p.is_dir()) {
+        return Some(dir);
+    }
+    directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .filter(|p| p.is_dir())
 }
 
 /// Left padding for the header bar so the title clears the traffic lights.
