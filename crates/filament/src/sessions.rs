@@ -10,9 +10,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, space, text, text_input,
-};
+use iced::widget::{button, checkbox, column, container, pick_list, row, space, text, text_input};
 use iced::{border, Background, Center, Color, Element, Fill, Padding, Shadow, Theme};
 
 use filament_core::{
@@ -95,6 +93,9 @@ pub enum SessionMsg {
     OpenUrl(String),
     RepoInputChanged(String),
     OpenRepo,
+    /// Pick a repository folder with the native file dialog.
+    BrowseRepo,
+    /// Switch the active repository to a known path.
     SetRepo(PathBuf),
 }
 
@@ -444,13 +445,15 @@ impl SessionsState {
             left: 10.0,
         });
 
-        let list = scrollable(container(col).padding(Padding {
-            top: 0.0,
-            right: 8.0,
-            bottom: 12.0,
-            left: 8.0,
-        }))
-        .height(Fill);
+        let list = widgets::scroll(
+            container(col).padding(Padding {
+                top: 0.0,
+                right: 8.0,
+                bottom: 12.0,
+                left: 8.0,
+            }),
+            theme,
+        );
 
         column![header, list].height(Fill).into()
     }
@@ -712,6 +715,8 @@ impl SessionsState {
             .into()
         });
 
+        // Browsing opens the OS folder picker; the text field stays for typing or
+        // pasting an exact path (Enter opens it).
         let open_row = row![
             text_input("/path/to/repo", &self.repo_input)
                 .on_input(|s| Message::Sessions(SessionMsg::RepoInputChanged(s)))
@@ -721,8 +726,8 @@ impl SessionsState {
                 .width(Fill),
             widgets::icon_button(
                 icon::FOLDER_OPEN,
-                "Open",
-                Message::Sessions(SessionMsg::OpenRepo),
+                "Browse…",
+                Message::Sessions(SessionMsg::BrowseRepo),
                 theme,
             ),
         ]
@@ -851,9 +856,11 @@ impl SessionsState {
         .spacing(14)
         .width(Fill);
 
-        scrollable(container(widgets::card_titleless(body.into(), theme)).padding(24))
-            .height(Fill)
-            .into()
+        widgets::scroll(
+            container(widgets::card_titleless(body.into(), theme)).padding(th::PAD_PANE),
+            theme,
+        )
+        .into()
     }
 
     fn form_view<'a>(&'a self, form: &'a NewForm, theme: &Theme) -> Element<'a, Message> {
@@ -921,7 +928,7 @@ impl SessionsState {
         .width(Fill);
 
         let mut content = column![text("New session").size(th::TEXT_H2)]
-            .spacing(16)
+            .spacing(th::GAP_SECTION)
             .width(Fill);
         content = content.push(widgets::card_titleless(body.into(), theme));
         if let Some(err) = &self.error {
@@ -929,9 +936,7 @@ impl SessionsState {
                 color: Some(th::danger()),
             }));
         }
-        scrollable(container(content).padding(24))
-            .height(Fill)
-            .into()
+        widgets::scroll(container(content).padding(th::PAD_PANE), theme).into()
     }
 
     fn session_detail<'a>(&'a self, s: &'a Session, theme: &Theme) -> Element<'a, Message> {
@@ -1049,7 +1054,9 @@ impl SessionsState {
             theme,
         );
 
-        let mut content = column![header, worktree_card].spacing(16).width(Fill);
+        let mut content = column![header, worktree_card]
+            .spacing(th::GAP_SECTION)
+            .width(Fill);
 
         // Delete confirmation.
         if self.confirming.as_deref() == Some(&s.id) {
@@ -1113,9 +1120,7 @@ impl SessionsState {
             }));
         }
 
-        scrollable(container(content).padding(24))
-            .height(Fill)
-            .into()
+        widgets::scroll(container(content).padding(th::PAD_PANE), theme).into()
     }
 
     /// The status quick-action row (mark in review / pause / archive / return).

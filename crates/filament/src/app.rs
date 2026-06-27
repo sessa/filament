@@ -4,9 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use iced::widget::{
-    button, column, container, markdown, row, rule, scrollable, space, text, text_editor,
-};
+use iced::widget::{button, column, container, markdown, row, rule, space, text, text_editor};
 use iced::{
     border, Background, Border, Center, Color, Element, Fill, Length, Padding, Shadow,
     Subscription, Task, Theme,
@@ -75,6 +73,9 @@ pub struct App {
     /// Index into `terminals` of the focused tab.
     active_tab: Option<usize>,
     terminal_open: bool,
+    /// Set when a terminal failed to launch, so the panel can explain why
+    /// instead of silently showing nothing.
+    terminal_error: Option<String>,
     next_term_id: u64,
     /// Which top-level section is active.
     section: Section,
@@ -199,6 +200,7 @@ impl App {
             terminals: Vec::new(),
             active_tab: None,
             terminal_open: false,
+            terminal_error: None,
             next_term_id: 0,
             section: if cli.start_settings {
                 Section::Settings
@@ -249,12 +251,14 @@ impl App {
                 app.mode = Mode::EditAgent(Box::new(st));
             }
         }
-        if cli.start_terminal {
+        let startup = if cli.start_terminal {
             let cwd = app.workspace.options.workspace.clone();
-            app.open_shell(cwd);
-        }
+            app.open_shell(cwd)
+        } else {
+            Task::none()
+        };
 
-        (app, Task::none())
+        (app, startup)
     }
 
     pub fn title(&self) -> String {
@@ -301,55 +305,58 @@ impl App {
     }
 
     /// Launch `claude` in `cwd` as a new tab.
-    fn open_claude(&mut self, cwd: Option<PathBuf>) {
+    fn open_claude(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
+        let cwd = usable_cwd(cwd);
         let label = label_for("claude", cwd.as_deref());
-        let settings = terminal::agent_settings(cwd.clone(), self.term_opts());
-        self.open_terminal(settings, label, "claude", None, None);
+        let settings = terminal::agent_settings(cwd, self.term_opts());
+        self.open_terminal(settings, label, "claude", None, None)
     }
 
     /// Launch a plain shell in `cwd` as a new tab.
-    fn open_shell(&mut self, cwd: Option<PathBuf>) {
+    fn open_shell(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
+        let cwd = usable_cwd(cwd);
         let label = label_for("shell", cwd.as_deref());
         let settings = terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
-        self.open_terminal(settings, label, "shell", None, None);
+        self.open_terminal(settings, label, "shell", None, None)
     }
 
     /// Open (or focus an existing) **manager** Claude terminal — crow's
     /// persistent orchestration session in plan/auto mode.
-    fn open_manager(&mut self) {
+    fn open_manager(&mut self) -> Task<Message> {
         if let Some(idx) = self.terminals.iter().position(|t| t.kind == "manager") {
             self.active_tab = Some(idx);
             self.terminal_open = true;
-            return;
+            return Task::none();
         }
-        let cwd = self
-            .config
-            .dev_root
-            .clone()
-            .filter(|p| p.is_dir())
-            .or_else(|| self.active_cwd());
+        let cwd = usable_cwd(
+            self.config
+                .dev_root
+                .clone()
+                .filter(|p| p.is_dir())
+                .or_else(|| self.active_cwd()),
+        );
         let settings = terminal::manager_settings(
             cwd,
             self.term_opts(),
             self.config.automation.manager_auto_permission,
             self.config.automation.remote_control,
         );
-        self.open_terminal(settings, "manager · claude".into(), "manager", None, None);
+        self.open_terminal(settings, "manager · claude".into(), "manager", None, None)
     }
 
     /// Launch a session's claude/shell/command terminal as a tab, recording it
     /// in the session store so the CLI can see it.
-    fn open_session_terminal(&mut self, session_id: &str, rec: &TerminalRec) {
-        let cwd = Some(rec.cwd.clone());
+    fn open_session_terminal(&mut self, session_id: &str, rec: &TerminalRec) -> Task<Message> {
+        let cwd = usable_cwd(Some(rec.cwd.clone()));
         let opts = self.term_opts();
         let settings = match rec.kind.as_str() {
-            "claude" => terminal::agent_settings(cwd.clone(), opts),
+            "claude" => terminal::agent_settings(cwd, opts),
             "command" => rec
                 .command
                 .as_deref()
                 .map(|c| terminal::command_settings(cwd.clone(), opts, c))
                 .unwrap_or_else(|| terminal::shell_settings(cwd.clone(), &self.prefs.shell, opts)),
-            _ => terminal::shell_settings(cwd.clone(), &self.prefs.shell, opts),
+            _ => terminal::shell_settings(cwd, &self.prefs.shell, opts),
         };
         self.open_terminal(
             settings,
@@ -357,10 +364,12 @@ impl App {
             &rec.kind,
             Some(session_id.to_string()),
             Some(rec.id.clone()),
-        );
+        )
     }
 
-    /// Create a new terminal tab with the given settings and focus it.
+    /// Create a new terminal tab with the given settings and focus it (which also
+    /// drives its first resize/render). On failure the panel stays open to show
+    /// why, instead of silently showing nothing.
     fn open_terminal(
         &mut self,
         settings: iced_term::settings::Settings,
@@ -368,20 +377,30 @@ impl App {
         kind: &str,
         session_id: Option<String>,
         uid: Option<String>,
-    ) {
+    ) -> Task<Message> {
         let id = self.next_term_id;
         self.next_term_id += 1;
-        if let Ok(term) = iced_term::Terminal::new(id, settings) {
-            self.terminals.push(TermTab {
-                id,
-                term,
-                label,
-                kind: kind.to_string(),
-                session_id,
-                uid,
-            });
-            self.active_tab = Some(self.terminals.len() - 1);
-            self.terminal_open = true;
+        match iced_term::Terminal::new(id, settings) {
+            Ok(term) => {
+                let widget_id = term.widget_id().clone();
+                self.terminals.push(TermTab {
+                    id,
+                    term,
+                    label,
+                    kind: kind.to_string(),
+                    session_id,
+                    uid,
+                });
+                self.active_tab = Some(self.terminals.len() - 1);
+                self.terminal_open = true;
+                self.terminal_error = None;
+                iced_term::TerminalView::focus(widget_id)
+            }
+            Err(e) => {
+                self.terminal_open = true;
+                self.terminal_error = Some(format!("Couldn't start the terminal: {e}"));
+                Task::none()
+            }
         }
     }
 
@@ -475,11 +494,7 @@ impl App {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => {
-                self.prefs.theme = if self.prefs.theme.is_dark() {
-                    crate::prefs::ThemeMode::Light
-                } else {
-                    crate::prefs::ThemeMode::Dark
-                };
+                self.prefs.theme = self.prefs.theme.next();
                 self.prefs.save();
             }
             Message::Rescan | Message::FsChanged => self.rescan(),
@@ -503,18 +518,23 @@ impl App {
             Message::Cfg(msg) => return self.update_cfg(msg),
 
             Message::ToggleTerminal => {
-                if self.terminals.is_empty() {
-                    let cwd = self.active_cwd();
-                    self.open_shell(cwd);
+                if self.terminal_open {
+                    // Visible (live terminals or an error notice) → hide it.
+                    self.terminal_open = false;
+                } else if !self.terminals.is_empty() || self.terminal_error.is_some() {
+                    // Hidden but still alive → reveal it.
+                    self.terminal_open = true;
                 } else {
-                    self.terminal_open = !self.terminal_open;
+                    // Nothing yet (or a prior launch failed) → start a shell.
+                    let cwd = self.active_cwd();
+                    return self.open_shell(cwd);
                 }
             }
             Message::RunSelectedAgent => {
                 let cwd = self.active_cwd();
-                self.open_claude(cwd);
+                return self.open_claude(cwd);
             }
-            Message::OpenManager => self.open_manager(),
+            Message::OpenManager => return self.open_manager(),
             Message::SelectTab(idx) => {
                 if idx < self.terminals.len() {
                     self.active_tab = Some(idx);
@@ -667,7 +687,7 @@ impl App {
             }
             ipc::Signal::OpenTerminal { session, terminal } => {
                 self.sessions.reload();
-                self.open_session_terminal(&session, &terminal);
+                return self.open_session_terminal(&session, &terminal);
             }
             ipc::Signal::CloseTerminal { terminal, .. } => {
                 if let Some(id) = self
@@ -846,18 +866,20 @@ impl App {
             SessionMsg::OpenAgent(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id.clone());
-                    let label = label_for("claude", Some(&cwd));
-                    let settings = terminal::agent_settings(Some(cwd), self.term_opts());
-                    self.open_terminal(settings, label, "claude", Some(id), None);
+                    let cwd = usable_cwd(Some(cwd));
+                    let label = label_for("claude", cwd.as_deref());
+                    let settings = terminal::agent_settings(cwd, self.term_opts());
+                    return self.open_terminal(settings, label, "claude", Some(id), None);
                 }
             }
             SessionMsg::OpenShell(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
                     self.sessions.selected = Some(id.clone());
-                    let label = label_for("shell", Some(&cwd));
+                    let cwd = usable_cwd(Some(cwd));
+                    let label = label_for("shell", cwd.as_deref());
                     let settings =
-                        terminal::shell_settings(Some(cwd), &self.prefs.shell, self.term_opts());
-                    self.open_terminal(settings, label, "shell", Some(id), None);
+                        terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
+                    return self.open_terminal(settings, label, "shell", Some(id), None);
                 }
             }
             SessionMsg::SetStatus(id, state) => {
@@ -1005,6 +1027,24 @@ impl App {
                 let path = self.sessions.repo_input.trim().to_string();
                 if !path.is_empty() {
                     self.set_active_repo(PathBuf::from(path));
+                }
+            }
+            SessionMsg::BrowseRepo => {
+                // The native folder picker is modal; it runs on this (main) thread
+                // and blocks until the user chooses or cancels.
+                let start = self
+                    .sessions
+                    .repo_root
+                    .clone()
+                    .or_else(|| self.active_cwd())
+                    .filter(|p| p.is_dir());
+                let mut dialog = rfd::FileDialog::new().set_title("Open a git repository");
+                if let Some(dir) = start {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(path) = dialog.pick_folder() {
+                    self.sessions.repo_input = path.display().to_string();
+                    self.set_active_repo(path);
                 }
             }
             SessionMsg::SetRepo(path) => self.set_active_repo(path),
@@ -1308,13 +1348,16 @@ impl App {
         let detail: Element<Message> = match self.section {
             Section::Config => match &self.mode {
                 Mode::Inspect => self.detail(),
-                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(20))
+                Mode::EditAgent(st) => {
+                    widgets::scroll(container(st.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
+                Mode::EditSource(st) => container(st.view(&theme))
+                    .padding(th::PAD_PANE)
                     .height(Fill)
                     .into(),
-                Mode::EditSource(st) => container(st.view(&theme)).padding(20).height(Fill).into(),
-                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(20))
-                    .height(Fill)
-                    .into(),
+                Mode::Wizard(w) => {
+                    widgets::scroll(container(w.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
             },
             Section::Sessions => self.sessions.detail(&self.config, &theme),
             Section::Settings => settingsview::view(
@@ -1332,15 +1375,26 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let right_pane: Element<Message> = if self.terminal_open && !self.terminals.is_empty() {
-            column![
-                detail_panel,
-                container(self.terminal_panel(&theme)).height(Length::FillPortion(2)),
-            ]
-            .spacing(10)
-            .into()
+        let docked: Option<Element<Message>> = if self.terminal_open {
+            if !self.terminals.is_empty() {
+                Some(self.terminal_panel(&theme))
+            } else {
+                self.terminal_error
+                    .as_deref()
+                    .map(|err| self.terminal_error_panel(err, &theme))
+            }
         } else {
-            detail_panel.into()
+            None
+        };
+
+        let right_pane: Element<Message> = match docked {
+            Some(panel) => column![
+                detail_panel,
+                container(panel).height(Length::FillPortion(2)),
+            ]
+            .spacing(th::GAP_PANEL)
+            .into(),
+            None => detail_panel.into(),
         };
 
         let (sidebar_inner, sidebar_width) = match self.section {
@@ -1363,12 +1417,31 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
-
-        let content = column![self.header(&theme), body]
-            .spacing(10)
-            .padding(10)
+        let body = row![sidebar_panel, right_pane]
+            .spacing(th::GAP_PANEL)
             .height(Fill);
+
+        // On macOS the header is flush with the top (it doubles as the title
+        // bar), so the body sits below a hairline divider and is inset on its
+        // own. Elsewhere the native title bar is above us, so the header is a
+        // normal inset panel with even padding around everything.
+        let content = if cfg!(target_os = "macos") {
+            column![
+                self.header(&theme),
+                rule::horizontal(1),
+                container(body)
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(th::GAP_PANEL),
+            ]
+            .width(Fill)
+            .height(Fill)
+        } else {
+            column![self.header(&theme), body]
+                .spacing(th::GAP_PANEL)
+                .padding(th::GAP_PANEL)
+                .height(Fill)
+        };
 
         // Rounded glass frame: the visible "window", with soft corners over the
         // OS blur outside the radius.
@@ -1395,7 +1468,7 @@ impl App {
         let muted = th::muted(theme);
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
-        let shadow = th::card_shadow();
+        let shadow = th::panel_shadow();
 
         // Tab strip across all terminals, with a close (×) on each.
         let mut tabs =
@@ -1505,6 +1578,64 @@ impl App {
             .into()
     }
 
+    /// Shown in place of the terminal when a launch fails, so the failure is
+    /// visible (and dismissable) rather than an empty panel.
+    fn terminal_error_panel<'a>(&'a self, err: &'a str, theme: &Theme) -> Element<'a, Message> {
+        let muted = th::muted(theme);
+        let danger = theme.palette().danger;
+        let bg = th::surface_strong(theme);
+        let bdr = th::hairline(theme);
+        let shadow = th::panel_shadow();
+
+        let bar = container(
+            row![
+                icon::icon(icon::WARNING)
+                    .size(13)
+                    .style(move |_: &Theme| text::Style {
+                        color: Some(danger)
+                    }),
+                text("Terminal")
+                    .size(th::TEXT_META)
+                    .style(move |_| text::Style { color: Some(muted) }),
+                space().width(Fill),
+                widgets::icon_only(icon::CLOSE, Message::ToggleTerminal, theme),
+            ]
+            .align_y(Center)
+            .spacing(8),
+        )
+        .padding(Padding {
+            top: 5.0,
+            right: 6.0,
+            bottom: 5.0,
+            left: 12.0,
+        })
+        .width(Fill);
+
+        let body = container(
+            text(err)
+                .size(th::TEXT_BODY)
+                .style(move |_| text::Style { color: Some(muted) }),
+        )
+        .padding(16)
+        .width(Fill)
+        .height(Fill);
+
+        container(column![bar, rule::horizontal(1), body].height(Fill))
+            .clip(true)
+            .height(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg)),
+                border: Border {
+                    color: bdr,
+                    width: 1.0,
+                    radius: th::RADIUS_PANEL.into(),
+                },
+                shadow,
+                ..container::Style::default()
+            })
+            .into()
+    }
+
     /// The segmented Config / Sessions / Settings switcher shown in the header.
     fn section_toggle<'a>(&self, theme: &Theme) -> Element<'a, Message> {
         let seg = |glyph: char, label: &'static str, section: Section, active: bool| {
@@ -1584,15 +1715,13 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
-        let theme_toggle = widgets::icon_only(
-            if self.prefs.theme.is_dark() {
-                icon::SUN
-            } else {
-                icon::MOON
-            },
-            Message::ToggleTheme,
-            theme,
-        );
+        // Cycles Dark → Light → Ayu; the glyph shows the active theme.
+        let theme_glyph = match self.prefs.theme {
+            crate::prefs::ThemeMode::Dark => icon::MOON,
+            crate::prefs::ThemeMode::Light => icon::SUN,
+            crate::prefs::ThemeMode::Ayu => icon::PALETTE,
+        };
+        let theme_toggle = widgets::icon_only(theme_glyph, Message::ToggleTheme, theme);
         let terminal_button = widgets::icon_button(
             icon::TERMINAL,
             if self.terminal_open {
@@ -1730,15 +1859,46 @@ impl App {
         };
         let bar = bar.push(right).align_y(Center).spacing(4);
 
-        container(bar)
-            .padding(Padding {
-                top: 9.0,
-                right: 12.0,
-                bottom: 9.0,
-                left: 14.0,
-            })
-            .style(widgets::panel(theme))
-            .into()
+        if cfg!(target_os = "macos") {
+            // The header *is* the title bar: flush with the top, full width, with
+            // the content cleared past the traffic lights and centered to sit
+            // beside them. Rounded only at the top so it follows the window's
+            // corners; a divider under it (added in `view`) separates the body.
+            let surface = th::surface_strong(theme);
+            container(bar)
+                .width(Fill)
+                .padding(Padding {
+                    top: 2.0,
+                    right: 12.0,
+                    bottom: 8.0,
+                    left: header_left_inset(self.prefs.density.scale()),
+                })
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(surface)),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: border::Radius {
+                            top_left: 16.0,
+                            top_right: 16.0,
+                            bottom_right: 0.0,
+                            bottom_left: 0.0,
+                        },
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            container(bar)
+                .padding(Padding {
+                    top: 9.0,
+                    right: 12.0,
+                    bottom: 9.0,
+                    left: 14.0,
+                })
+                .style(widgets::panel(theme))
+                .into()
+        }
     }
 
     fn detail(&self) -> Element<'_, Message> {
@@ -1780,6 +1940,42 @@ impl App {
             }
         }
     }
+}
+
+/// Pick a working directory the terminal can actually start in.
+///
+/// A stale or missing path (e.g. a deleted worktree, or `/` from a GUI launch)
+/// makes the child shell fail to start — which looks like "nothing shows up in
+/// the shell". Fall back to the user's home directory, then to the process
+/// default (`None`), so a terminal always opens somewhere valid.
+fn usable_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(dir) = cwd.filter(|p| p.is_dir()) {
+        return Some(dir);
+    }
+    directories::UserDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
+        .filter(|p| p.is_dir())
+}
+
+/// Left padding for the header bar so the title clears the traffic lights.
+///
+/// On macOS the title bar is dissolved into the glass and the header doubles as
+/// it (see `window_settings` in `main` and `App::header`), sitting flush with
+/// the window's left edge. The native traffic-light cluster lives there, a fixed
+/// distance from that edge regardless of our UI scale, so reserve that width —
+/// converted from physical window points into pre-scale logical points — plus a
+/// gap before the title. On every other platform the default padding applies.
+#[cfg(target_os = "macos")]
+fn header_left_inset(scale: f32) -> f32 {
+    /// Right edge of the traffic-light cluster plus a gap, in window points.
+    const CLEAR_PT: f32 = 92.0;
+    CLEAR_PT / scale
+}
+
+/// Left padding for the header bar (non-macOS: the default, no traffic lights).
+#[cfg(not(target_os = "macos"))]
+fn header_left_inset(_scale: f32) -> f32 {
+    14.0
 }
 
 /// A short label for the terminal header: `program · dirname`.

@@ -3,9 +3,7 @@
 //! This edits Filament's own preferences (persisted via [`crate::prefs`]), which
 //! are distinct from the Claude Code `settings.json` shown in the Config section.
 
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, space, text, text_input, toggler,
-};
+use iced::widget::{button, column, container, pick_list, row, space, text, text_input, toggler};
 use iced::{border, Background, Border, Center, Color, Element, Fill, Padding, Shadow, Theme};
 
 use filament_core::{config::Config, CodeProvider, TaskProvider};
@@ -102,32 +100,24 @@ pub fn view<'a>(
         automation_card(config, theme),
         about_card(prefs, theme),
     ]
-    .spacing(16)
+    .spacing(th::GAP_SECTION)
     .width(Fill);
 
-    scrollable(container(content).padding(20))
-        .height(Fill)
-        .into()
+    crate::widgets::scroll(container(content).padding(th::PAD_PANE), theme).into()
 }
 
 // ---- cards ------------------------------------------------------------------
 
 fn appearance_card<'a>(prefs: &'a Prefs, theme: &Theme) -> Element<'a, Message> {
-    let theme_seg = row![
-        segment(
-            "Dark",
-            prefs.theme == ThemeMode::Dark,
-            PrefMsg::SetTheme(ThemeMode::Dark),
-            theme
-        ),
-        segment(
-            "Light",
-            prefs.theme == ThemeMode::Light,
-            PrefMsg::SetTheme(ThemeMode::Light),
+    let mut theme_seg = row![].spacing(0);
+    for mode in ThemeMode::ALL {
+        theme_seg = theme_seg.push(segment(
+            mode.label(),
+            prefs.theme == mode,
+            PrefMsg::SetTheme(mode),
             theme,
-        ),
-    ]
-    .spacing(0);
+        ));
+    }
 
     let mut swatches = row![].spacing(8).align_y(Center);
     for accent in AccentChoice::ALL {
@@ -486,7 +476,6 @@ fn card<'a>(
     let bdr = th::hairline(theme);
     let muted = th::muted(theme);
     let accent = theme.palette().primary;
-    let shadow = th::card_shadow();
     let head = row![
         icon::icon(glyph)
             .size(13)
@@ -500,7 +489,7 @@ fn card<'a>(
     .spacing(7)
     .align_y(Center);
     container(column![head, body].spacing(14))
-        .padding(16)
+        .padding(th::PAD_CARD)
         .width(Fill)
         .style(move |_| container::Style {
             background: Some(Background::Color(surface)),
@@ -509,7 +498,6 @@ fn card<'a>(
                 width: 1.0,
                 radius: th::RADIUS_CARD.into(),
             },
-            shadow,
             ..container::Style::default()
         })
         .into()
@@ -608,7 +596,7 @@ fn accent_swatch<'a>(
                 background: Some(Background::Color(color)),
                 text_color: Color::WHITE,
                 border,
-                shadow: th::soft_shadow(),
+                shadow: Shadow::default(),
                 snap: true,
             }
         })
