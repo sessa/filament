@@ -941,7 +941,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "filament"
-version = "0.2.0"
+version = "0.2.5"
 dependencies = [
  "directories",
  "filament-core",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "filament-core"
-version = "0.2.0"
+version = "0.2.5"
 dependencies = [
  "directories",
  "serde",
@@ -1568,14 +1568,13 @@ dependencies = [
 [[package]]
 name = "iced_term"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e287970417db55e0b395a966f061f10c7d3b03fd146d0b8806678d8c063103"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "iced",
  "iced_core",
  "iced_graphics",
+ "log",
  "open",
  "tokio",
 ]
