@@ -40,10 +40,11 @@ safely. Filament turns the whole config into a legible, editable dashboard.
   verbatim. Writes are atomic.
 - **Creation wizard** — scaffold a new agent, skill, or command into the scope of
   your choice from a template.
-- **Sessions** — a crow-inspired worktree workflow: pair a git **worktree** with a
-  Claude Code instance (and an optional GitHub issue / PR) per task, see them on a
-  Working → In Review → Done board, and launch `claude` in the worktree with one
-  click. (See [Sessions](#sessions--worktree-workflow) below.)
+- **Sessions** — a full [crow](https://github.com/radiusmethod/crow) port: pair a
+  git **worktree** with a Claude Code instance per task across Board / Review /
+  Ticket boards, with cross-backend GitHub/GitLab/Jira support, an automation
+  suite, a manager terminal, multi-tab terminals, and a CLI control socket.
+  (See [Sessions](#sessions--full-crow-parity) below.)
 - **Integrated terminal** — an embedded terminal panel (Alacritty engine via
   `iced_term`) so you can run `claude` for the selected agent (the **Run**
   button) or any command, without leaving the app. *(Ghostty itself can't be
@@ -68,45 +69,100 @@ safely. Filament turns the whole config into a legible, editable dashboard.
 
 ![Integrated terminal](docs/screenshot-terminal.png)
 
-## Sessions — worktree workflow
+## Sessions — full crow parity
 
-The **Sessions** section (toggle it in the header) brings the core idea of
+The **Sessions** section (toggle it in the header) ports the whole workflow of
 [radiusmethod/crow](https://github.com/radiusmethod/crow) into Filament: instead
 of juggling branches in one checkout, you spin up an isolated **git worktree** per
-task and run Claude Code in it.
+task, run Claude Code in it, and manage the work across three boards — a sessions
+pipeline, a PR **review** board, and a project **ticket** board — with optional
+automation. crow is a native macOS/Swift app built on Ghostty + tmux; Filament
+brings the same model to a cross-platform Rust/Iced app (the embedded terminal is
+[`iced_term`](https://crates.io/crates/iced_term) — Alacritty-backed — since
+Ghostty can't be embedded in wgpu yet, and terminals run in-process rather than
+via tmux).
 
 ![Sessions board](docs/screenshot-sessions.png)
 
-- **Pick a repository** — the board attaches to the git repository Filament was
-  opened in. When it's launched from somewhere that isn't a repo (e.g. a
-  double-clicked app bundle, whose working directory is `/`), it no longer guesses
-  — instead it offers an **Open repository** field and a quick switcher across the
-  repos you've worked in. The chosen repo is remembered between launches.
-- **New session** — give it a title and/or a GitHub issue URL and pick a base
-  branch. Filament creates a worktree on a fresh branch (in a sibling
-  `<repo>-worktrees/` directory) and registers the session.
-- **Board** — sessions are grouped **Working → In Review → Done**. The state is
-  derived from the linked PR (open ⇒ In Review, merged ⇒ Done) and issue (closed
-  ⇒ Done) when GitHub data is available. By default the board shows **every
-  session you've run** across all repositories (toggle "Show all repositories" in
-  Settings to scope it to the active repo).
-- **Run Claude / Shell** — launch `claude` (or a plain shell) in the session's
-  worktree, right in the embedded terminal — no `cd` dance.
-- **Tickets** — open GitHub issues without a session show up as tickets; "Start
-  working" turns one into a session in a click.
-- **PR & CI status** — **Refresh** polls GitHub for each session's pull request:
-  draft / review decision and a roll-up of CI checks (passing / pending /
-  failing).
-- **Orphan recovery** — worktrees created outside Filament are detected on load
-  and can be **adopted** as sessions.
-- **Safe deletion** — removing a session deletes its worktree, except when it's on
-  a protected (base/default) branch, which is preserved.
+**Boards (switch with the segmented control):**
 
-GitHub features use the [`gh`](https://cli.github.com) CLI and are entirely
-optional: when `gh` is missing or unauthenticated, sessions, worktrees, and the
-terminal still work — only issue/PR data is unavailable, surfaced as a quiet hint.
-Worktree management uses your installed `git` (no libgit2). Session metadata is
-stored in your OS data directory, not in the repo.
+- **Board** — sessions grouped **Working → In Review → Done**, plus **Paused** and
+  **Archived** side groups. State is derived from the linked PR (open ⇒ In Review,
+  merged ⇒ Done) and issue (closed ⇒ Done), with **positive-evidence
+  auto-complete** so a session attached to an already-closed issue isn't marked
+  done until real work exists. An inline **filter** narrows the list; a
+  **checkbox** on each row enables **multi-select** with a bulk **delete** bar.
+- **Review** — a PR triage board: sessions in review plus open PRs that don't yet
+  back a session, each with **Start review** (creates a worktree on the PR's
+  existing branch).
+- **Tickets** — open issues grouped into project-board columns (**Backlog →
+  Ready → In Progress → In Review → Done**) with a status filter; "Start working"
+  turns a ticket into a session.
+
+**Per-session detail:**
+
+- **Run Claude / Shell** in the worktree, **Copy branch**, **Open PR**, and a
+  **status** row (mark in review, pause, archive, set active).
+- **Rename** inline, attach reference **links**, and a two-step delete
+  confirmation that distinguishes *remove session* (keep the worktree) from
+  *delete worktree*.
+- **PR card** with draft / review decision, **merge readiness**
+  (mergeable / conflicting / merged) and the CI check roll-up (passing / pending /
+  failing).
+
+**Cross-backend (task ≠ code):** each session records a **code backend** (GitHub
+via `gh`, or GitLab via `glab`) for PRs/CI and a **task backend** (GitHub issues,
+GitLab issues, or **Jira** via `acli`) for tickets — configured in Settings →
+Backends, globally or per workspace, with a `branchPrefix`, self-hosted GitLab
+`host` (`GITLAB_HOST`), Jira site/project, repo **exclude** lists (with `*`
+wildcards), and a background **poll interval** (default 60s).
+
+**Automation suite (Settings → Automation, off by default except auto-complete):**
+auto-create a session from a labelled issue (`crow:auto`), suggest opening a PR
+when a session has work but none, auto-start review when a PR becomes reviewable,
+respond to change-requests / CI failures by typing a follow-up into the session
+terminal, and auto-merge (squash) approved+green PRs carrying `crow:merge`.
+
+**Manager terminal & tabs:** a persistent **Manager** Claude session (launched
+`--permission-mode auto`, optionally `--rc`) for orchestration, and **multiple
+terminal tabs** per session — open, switch, rename, and close them; tabs survive
+navigation.
+
+**Other:** **orphan recovery** (adopt untracked worktrees), **safe deletion**
+(protected base/default branches keep their worktree; removal never `--force`s),
+a first-run **setup wizard**, and a repository switcher remembered between
+launches.
+
+Provider features use the [`gh`](https://cli.github.com) / `glab` / `acli` CLIs
+and are entirely optional: when they're missing or unauthenticated, sessions,
+worktrees, and terminals still work — only issue/PR data is unavailable, surfaced
+as a quiet hint. Worktree management uses your installed `git` (no libgit2).
+Session metadata and configuration live in your OS data directory, not in the repo.
+
+### CLI & automation socket
+
+Like crow, a running Filament listens on a Unix socket so it can be driven from
+the command line — and, via the bundled **`filament-workspace`** Claude skill
+(scaffolded by `filament setup`), by Claude Code itself:
+
+```text
+filament setup [--dev-root <dir>]      # initialize config + scaffold the skill
+filament list-sessions                 # JSON of all sessions
+filament get-session   --session <id>
+filament rename-session --session <id> <name>
+filament set-status    --session <id> <active|paused|inReview|completed|archived>
+filament set-ticket    --session <id> [--url <u>] [--title <t>] [--number <n>]
+filament add-link      --session <id> --label <l> --url <u> [--type <kind>]
+filament list-links    --session <id>
+filament new-terminal  --session <id> --cwd <path> [--name <t>] [--command <c>]
+filament list-terminals / close-terminal / rename-terminal …
+filament send          --session <id> [--terminal <id>] <text>
+filament select-session --session <id>
+filament delete-session --session <id> [--keep-worktree]
+```
+
+Store-backed commands work against the on-disk session store; terminal and
+focus commands signal the running app. (The socket is Unix-only.)
 
 ## Install / build
 
@@ -179,8 +235,10 @@ A Cargo workspace with two crates:
   splitter, per-file parsers (errors captured as diagnostics, never panics),
   discovery + scope/precedence resolution, validation, and lossless edit / atomic
   write primitives. Also the session engine — a `git` worktree wrapper, the
-  `session` model + JSON store, and `github` (`gh`-backed, gracefully degrading)
-  integration. Fully unit-tested.
+  `session` model + JSON store, `config` (cross-backend / automation settings), a
+  provider-agnostic `provider` facade over `github` (`gh`), `gitlab` (`glab`) and
+  `jira` (`acli`) — all gracefully degrading — the `automation` decision engine,
+  and the `ipc` protocol for the CLI control socket. Fully unit-tested.
 - **`filament`** — the Iced desktop app: sidebar, inspector, editor, wizard,
   theming (warm Claude-tuned palette + a small type/spacing scale), persisted
   preferences and a Settings screen, fuzzy search, the file-watch subscription,

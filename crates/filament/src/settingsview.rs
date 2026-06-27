@@ -6,7 +6,9 @@
 use iced::widget::{button, column, container, pick_list, row, space, text, text_input, toggler};
 use iced::{border, Background, Border, Center, Color, Element, Fill, Padding, Shadow, Theme};
 
-use crate::app::Message;
+use filament_core::{config::Config, CodeProvider, TaskProvider};
+
+use crate::app::{AutoFlag, CfgMsg, Message};
 use crate::icon;
 use crate::prefs::{
     AccentChoice, Density, PrefMsg, Prefs, ThemeMode, TERM_FONT_MAX, TERM_FONT_MIN,
@@ -19,6 +21,8 @@ pub fn sidebar<'a>(theme: &Theme) -> Element<'a, Message> {
         (icon::PALETTE, "Appearance", "Theme, accent & density"),
         (icon::TERMINAL, "Terminal", "Font size & shell"),
         (icon::SESSIONS, "Sessions", "Board & repositories"),
+        (icon::CONFIG, "Backends", "Provider, task tracker & Jira"),
+        (icon::ROCKET, "Automation", "Auto-create, review & merge"),
         (icon::INFO, "About", "Version & data files"),
     ];
     let mut col = column![text("SETTINGS")
@@ -83,6 +87,7 @@ fn legend_row<'a>(
 /// The Settings detail pane.
 pub fn view<'a>(
     prefs: &'a Prefs,
+    config: &'a Config,
     theme: &Theme,
     active_repo: Option<&'a std::path::Path>,
 ) -> Element<'a, Message> {
@@ -91,6 +96,8 @@ pub fn view<'a>(
         appearance_card(prefs, theme),
         terminal_card(prefs, theme),
         sessions_card(prefs, active_repo, theme),
+        backends_card(config, theme),
+        automation_card(config, theme),
         about_card(prefs, theme),
     ]
     .spacing(th::GAP_SECTION)
@@ -225,6 +232,207 @@ fn sessions_card<'a>(
         .into(),
         theme,
     )
+}
+
+fn backends_card<'a>(config: &'a Config, theme: &Theme) -> Element<'a, Message> {
+    let muted = th::muted(theme);
+    let provider = pick_list(
+        CodeProvider::ALL.to_vec(),
+        Some(config.default_provider),
+        |p| Message::Cfg(CfgMsg::SetProvider(p)),
+    )
+    .text_size(th::TEXT_UI)
+    .padding(7)
+    .width(Fill);
+    let task = pick_list(
+        TaskProvider::ALL.to_vec(),
+        Some(config.default_task_provider),
+        |p| Message::Cfg(CfgMsg::SetTaskProvider(p)),
+    )
+    .text_size(th::TEXT_UI)
+    .padding(7)
+    .width(Fill);
+    card(
+        icon::CONFIG,
+        "Backends",
+        column![
+            setting_row("Code backend", provider.into(), theme),
+            setting_row("Task backend", task.into(), theme),
+            setting_row(
+                "Branch prefix",
+                cfg_input("feature/", &config.branch_prefix, CfgMsg::SetBranchPrefix).into(),
+                theme,
+            ),
+            setting_row(
+                "GitLab host",
+                cfg_input(
+                    "gitlab.example.com",
+                    &config.gitlab_host,
+                    CfgMsg::SetGitlabHost
+                )
+                .into(),
+                theme,
+            ),
+            setting_row(
+                "Dev root",
+                cfg_input("~/Dev", &config.dev_root_buf, CfgMsg::SetDevRoot).into(),
+                theme,
+            ),
+            setting_row(
+                "Poll seconds (0 = off)",
+                cfg_input("60", &config.poll_buf, CfgMsg::SetPollSeconds).into(),
+                theme,
+            ),
+            setting_row(
+                "Exclude review repos",
+                cfg_input(
+                    "org/*, …",
+                    &config.exclude_review_buf,
+                    CfgMsg::SetExcludeReview
+                )
+                .into(),
+                theme,
+            ),
+            setting_row(
+                "Exclude ticket repos",
+                cfg_input(
+                    "org/*, …",
+                    &config.exclude_ticket_buf,
+                    CfgMsg::SetExcludeTicket
+                )
+                .into(),
+                theme,
+            ),
+            setting_row(
+                "Jira site",
+                cfg_input(
+                    "https://acme.atlassian.net",
+                    &config.jira.site_url,
+                    CfgMsg::SetJiraSite
+                )
+                .into(),
+                theme,
+            ),
+            setting_row(
+                "Jira project",
+                cfg_input("ACME", &config.jira.project_key, CfgMsg::SetJiraProject).into(),
+                theme,
+            ),
+            text("Self-hosted GitLab is reached via GITLAB_HOST; Jira via the acli CLI.")
+                .size(th::TEXT_LABEL)
+                .style(move |_| text::Style { color: Some(muted) }),
+        ]
+        .spacing(12)
+        .into(),
+        theme,
+    )
+}
+
+fn automation_card<'a>(config: &'a Config, theme: &Theme) -> Element<'a, Message> {
+    let a = &config.automation;
+    let muted = th::muted(theme);
+    card(
+        icon::ROCKET,
+        "Automation",
+        column![
+            toggle_setting(
+                "Auto-create from label",
+                a.auto_create,
+                AutoFlag::Create,
+                theme
+            ),
+            setting_row(
+                "Auto-create label",
+                cfg_input("crow:auto", &a.auto_label, CfgMsg::SetAutoLabel).into(),
+                theme,
+            ),
+            toggle_setting(
+                "Suggest PR when work has no PR",
+                a.suggest_pr,
+                AutoFlag::SuggestPr,
+                theme
+            ),
+            toggle_setting(
+                "Auto-start review when reviewable",
+                a.auto_start_review,
+                AutoFlag::StartReview,
+                theme,
+            ),
+            toggle_setting(
+                "Respond to change requests",
+                a.respond_changes_requested,
+                AutoFlag::RespondChanges,
+                theme,
+            ),
+            toggle_setting(
+                "Respond to CI failures",
+                a.respond_failed_ci,
+                AutoFlag::RespondCi,
+                theme
+            ),
+            toggle_setting(
+                "Auto-merge labeled PRs (squash)",
+                a.auto_merge,
+                AutoFlag::Merge,
+                theme
+            ),
+            setting_row(
+                "Auto-merge label",
+                cfg_input("crow:merge", &a.merge_label, CfgMsg::SetMergeLabel).into(),
+                theme,
+            ),
+            toggle_setting(
+                "Auto-complete on merge/close",
+                a.auto_complete,
+                AutoFlag::Complete,
+                theme
+            ),
+            toggle_setting(
+                "Manager: --permission-mode auto",
+                a.manager_auto_permission,
+                AutoFlag::ManagerAuto,
+                theme,
+            ),
+            toggle_setting(
+                "Manager: remote control (--rc)",
+                a.remote_control,
+                AutoFlag::RemoteControl,
+                theme
+            ),
+            text("Most automations are off by default and act only on the active repository.")
+                .size(th::TEXT_LABEL)
+                .style(move |_| text::Style { color: Some(muted) }),
+        ]
+        .spacing(10)
+        .into(),
+        theme,
+    )
+}
+
+/// A `text_input` bound to a [`CfgMsg`] string setter.
+fn cfg_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    make: fn(String) -> CfgMsg,
+) -> iced::widget::TextInput<'a, Message> {
+    text_input(placeholder, value)
+        .on_input(move |s| Message::Cfg(make(s)))
+        .size(th::TEXT_UI)
+        .padding(7)
+        .width(Fill)
+}
+
+/// A labeled toggler bound to an [`AutoFlag`].
+fn toggle_setting<'a>(
+    label: &'a str,
+    value: bool,
+    flag: AutoFlag,
+    theme: &Theme,
+) -> Element<'a, Message> {
+    let t = toggler(value)
+        .on_toggle(move |v| Message::Cfg(CfgMsg::Toggle(flag, v)))
+        .size(18);
+    setting_row(label, t.into(), theme)
 }
 
 fn about_card<'a>(prefs: &'a Prefs, theme: &Theme) -> Element<'a, Message> {

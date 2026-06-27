@@ -49,7 +49,9 @@ fn create_lists_and_removes_a_session() {
             title: "Add OAuth to the API".into(),
             base_branch: "main".into(),
             issue: None,
+            ..NewSession::default()
         },
+        "",
         1_700_000_000,
     )
     .expect("create session");
@@ -126,10 +128,8 @@ fn protected_branch_worktree_is_kept_on_removal() {
             worktree: wt.clone(),
             branch: "main".into(),
             base_branch: "main".into(),
-            issue: None,
-            pr: None,
             state: SessionState::Working,
-            created_unix: 0,
+            ..Session::default()
         }],
     };
 

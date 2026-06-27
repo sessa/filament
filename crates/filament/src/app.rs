@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use iced::widget::{button, column, container, markdown, row, rule, space, text, text_editor};
 use iced::{
@@ -10,14 +11,17 @@ use iced::{
 };
 
 use filament_core::{
-    git, github, session, Entry, GhError, ItemId, ItemKind, NewSession, SessionStore, Workspace,
+    automation, config::Config, git, ipc, provider, session, CodeProvider, Entry, ItemId, ItemKind,
+    NewSession, SessionState, SessionStore, TerminalRec, Workspace,
 };
 
 use crate::cli::Cli;
 use crate::prefs::{PrefMsg, Prefs};
 use crate::sessions::{self, SessionMsg};
 use crate::theme as th;
-use crate::{editor, icon, inspector, settingsview, sidebar, terminal, watcher, widgets, wizard};
+use crate::{
+    editor, icon, inspector, ipc_server, settingsview, sidebar, terminal, watcher, widgets, wizard,
+};
 
 /// Which top-level section is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,20 @@ impl Mode {
     }
 }
 
+/// One integrated terminal tab.
+pub struct TermTab {
+    pub id: u64,
+    pub term: iced_term::Terminal,
+    /// A short label describing what's running / where.
+    pub label: String,
+    /// "claude" / "shell" / "manager" / "command".
+    pub kind: String,
+    /// The session this terminal belongs to (if any).
+    pub session_id: Option<String>,
+    /// The persisted [`TerminalRec`] id (when created via a session / IPC).
+    pub uid: Option<String>,
+}
+
 pub struct App {
     workspace: Workspace,
     selection: Option<ItemId>,
@@ -50,12 +68,12 @@ pub struct App {
     search: String,
     kind_filter: Option<ItemKind>,
     mode: Mode,
-    /// The integrated terminal (lazily created); kept alive across hide/show.
-    terminal: Option<iced_term::Terminal>,
+    /// Integrated terminal tabs (kept alive across hide/show).
+    terminals: Vec<TermTab>,
+    /// Index into `terminals` of the focused tab.
+    active_tab: Option<usize>,
     terminal_open: bool,
-    /// A short label describing what the terminal is running / where.
-    terminal_label: String,
-    /// Set when the terminal failed to launch, so the panel can explain why
+    /// Set when a terminal failed to launch, so the panel can explain why
     /// instead of silently showing nothing.
     terminal_error: Option<String>,
     next_term_id: u64,
@@ -63,6 +81,10 @@ pub struct App {
     section: Section,
     /// Persisted app preferences (appearance, density, terminal, sessions).
     prefs: Prefs,
+    /// Cross-backend / automation configuration (crow's `config.json`).
+    config: Config,
+    /// A transient status line (automation / IPC feedback), shown in the header.
+    notice: Option<String>,
     /// The worktree-backed session manager (crow-style workflow).
     sessions: sessions::SessionsState,
 }
@@ -82,11 +104,20 @@ pub enum Message {
     SwitchSection(Section),
     Sessions(SessionMsg),
     Pref(PrefMsg),
+    Cfg(CfgMsg),
 
     // terminal
     Terminal(iced_term::Event),
     ToggleTerminal,
     RunSelectedAgent,
+    OpenManager,
+    SelectTab(usize),
+    CloseTab(u64),
+
+    // background / ipc
+    PollTick,
+    Ipc(ipc::Signal),
+    DismissNotice,
 
     // editing
     EnterEditAgent,
@@ -102,11 +133,45 @@ pub enum Message {
     WizardCreate,
 }
 
+/// An automation toggle (Settings → Automation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoFlag {
+    Create,
+    SuggestPr,
+    StartReview,
+    RespondChanges,
+    RespondCi,
+    Merge,
+    Complete,
+    ManagerAuto,
+    RemoteControl,
+}
+
+/// Messages that mutate the workspace [`Config`] from the Settings UI.
+#[derive(Debug, Clone)]
+pub enum CfgMsg {
+    SetProvider(CodeProvider),
+    SetTaskProvider(filament_core::TaskProvider),
+    SetBranchPrefix(String),
+    SetGitlabHost(String),
+    SetDevRoot(String),
+    SetPollSeconds(String),
+    SetExcludeReview(String),
+    SetExcludeTicket(String),
+    SetAutoLabel(String),
+    SetMergeLabel(String),
+    SetJiraSite(String),
+    SetJiraProject(String),
+    Toggle(AutoFlag, bool),
+    MarkInitialized,
+}
+
 impl App {
     pub fn new() -> (App, Task<Message>) {
         let cli = Cli::from_env();
         let workspace = Workspace::load(cli.options());
         let prefs = Prefs::load();
+        let config = Config::load();
 
         // Resolve the active repository: prefer a saved default repo, else the
         // launch workspace *only if it is actually a git repo*. (Launched from a
@@ -116,6 +181,12 @@ impl App {
             .default_repo
             .clone()
             .filter(|p| git::repo_root(p).is_some())
+            .or_else(|| {
+                config
+                    .dev_root
+                    .clone()
+                    .filter(|p| git::repo_root(p).is_some())
+            })
             .or_else(|| cli.workspace.clone());
         let sessions = sessions::SessionsState::load(repo_hint, prefs.show_all_sessions);
 
@@ -126,9 +197,9 @@ impl App {
             search: cli.search.clone().unwrap_or_default(),
             kind_filter: None,
             mode: Mode::Inspect,
-            terminal: None,
+            terminals: Vec::new(),
+            active_tab: None,
             terminal_open: false,
-            terminal_label: String::new(),
             terminal_error: None,
             next_term_id: 0,
             section: if cli.start_settings {
@@ -139,6 +210,8 @@ impl App {
                 Section::Config
             },
             prefs,
+            config,
+            notice: None,
             sessions,
         };
         app.selection = cli
@@ -212,13 +285,16 @@ impl App {
     }
 
     /// Watch the config locations so external edits refresh the UI live, plus
-    /// the terminal backend's event stream when a terminal exists.
+    /// every terminal tab's event stream, the IPC server, and the background
+    /// GitHub/GitLab poll timer.
     pub fn subscription(&self) -> Subscription<Message> {
-        let watch = watcher::subscription(self.watch_roots());
-        match &self.terminal {
-            Some(term) => Subscription::batch([watch, term.subscription().map(Message::Terminal)]),
-            None => watch,
+        let mut subs = vec![watcher::subscription(self.watch_roots())];
+        for tab in &self.terminals {
+            subs.push(tab.term.subscription().map(Message::Terminal));
         }
+        subs.push(ipc_server::subscription(self.sessions.store.path.clone()));
+        subs.push(poll_subscription(self.config.poll_seconds));
+        Subscription::batch(subs)
     }
 
     fn term_opts(&self) -> terminal::TermOpts {
@@ -228,50 +304,145 @@ impl App {
         }
     }
 
-    /// Launch `claude` in `cwd`.
+    /// Launch `claude` in `cwd` as a new tab.
     fn open_claude(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
         let cwd = usable_cwd(cwd);
         let label = label_for("claude", cwd.as_deref());
         let settings = terminal::agent_settings(cwd, self.term_opts());
-        self.open_terminal(settings, label)
+        self.open_terminal(settings, label, "claude", None, None)
     }
 
-    /// Launch a plain shell in `cwd`.
+    /// Launch a plain shell in `cwd` as a new tab.
     fn open_shell(&mut self, cwd: Option<PathBuf>) -> Task<Message> {
         let cwd = usable_cwd(cwd);
         let label = label_for("shell", cwd.as_deref());
         let settings = terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
-        self.open_terminal(settings, label)
+        self.open_terminal(settings, label, "shell", None, None)
     }
 
-    /// Create (or replace) the integrated terminal with the given settings and
-    /// reveal the panel. Replacing an existing terminal ends its session. On
-    /// success the new terminal is focused so the user can type immediately
-    /// (which also drives its first resize/render); on failure the panel stays
-    /// open to show why, instead of silently showing nothing.
+    /// Open (or focus an existing) **manager** Claude terminal — crow's
+    /// persistent orchestration session in plan/auto mode.
+    fn open_manager(&mut self) -> Task<Message> {
+        if let Some(idx) = self.terminals.iter().position(|t| t.kind == "manager") {
+            self.active_tab = Some(idx);
+            self.terminal_open = true;
+            return Task::none();
+        }
+        let cwd = usable_cwd(
+            self.config
+                .dev_root
+                .clone()
+                .filter(|p| p.is_dir())
+                .or_else(|| self.active_cwd()),
+        );
+        let settings = terminal::manager_settings(
+            cwd,
+            self.term_opts(),
+            self.config.automation.manager_auto_permission,
+            self.config.automation.remote_control,
+        );
+        self.open_terminal(settings, "manager · claude".into(), "manager", None, None)
+    }
+
+    /// Launch a session's claude/shell/command terminal as a tab, recording it
+    /// in the session store so the CLI can see it.
+    fn open_session_terminal(&mut self, session_id: &str, rec: &TerminalRec) -> Task<Message> {
+        let cwd = usable_cwd(Some(rec.cwd.clone()));
+        let opts = self.term_opts();
+        let settings = match rec.kind.as_str() {
+            "claude" => terminal::agent_settings(cwd, opts),
+            "command" => rec
+                .command
+                .as_deref()
+                .map(|c| terminal::command_settings(cwd.clone(), opts, c))
+                .unwrap_or_else(|| terminal::shell_settings(cwd.clone(), &self.prefs.shell, opts)),
+            _ => terminal::shell_settings(cwd, &self.prefs.shell, opts),
+        };
+        self.open_terminal(
+            settings,
+            rec.name.clone(),
+            &rec.kind,
+            Some(session_id.to_string()),
+            Some(rec.id.clone()),
+        )
+    }
+
+    /// Create a new terminal tab with the given settings and focus it (which also
+    /// drives its first resize/render). On failure the panel stays open to show
+    /// why, instead of silently showing nothing.
     fn open_terminal(
         &mut self,
         settings: iced_term::settings::Settings,
         label: String,
+        kind: &str,
+        session_id: Option<String>,
+        uid: Option<String>,
     ) -> Task<Message> {
         let id = self.next_term_id;
         self.next_term_id += 1;
         match iced_term::Terminal::new(id, settings) {
             Ok(term) => {
                 let widget_id = term.widget_id().clone();
-                self.terminal = Some(term);
+                self.terminals.push(TermTab {
+                    id,
+                    term,
+                    label,
+                    kind: kind.to_string(),
+                    session_id,
+                    uid,
+                });
+                self.active_tab = Some(self.terminals.len() - 1);
                 self.terminal_open = true;
-                self.terminal_label = label;
                 self.terminal_error = None;
                 iced_term::TerminalView::focus(widget_id)
             }
             Err(e) => {
-                self.terminal = None;
                 self.terminal_open = true;
-                self.terminal_label = label;
                 self.terminal_error = Some(format!("Couldn't start the terminal: {e}"));
                 Task::none()
             }
+        }
+    }
+
+    /// Close the tab with backend id `id`, fixing up the active index.
+    fn close_tab(&mut self, id: u64) {
+        let Some(idx) = self.terminals.iter().position(|t| t.id == id) else {
+            return;
+        };
+        // Drop the persisted terminal record, if any.
+        if let Some(tab) = self.terminals.get(idx) {
+            if let (Some(sid), Some(uid)) = (tab.session_id.clone(), tab.uid.clone()) {
+                if let Some(s) = self.sessions.store.get_mut(&sid) {
+                    s.terminals.retain(|t| t.id != uid);
+                    let _ = self.sessions.store.save();
+                }
+            }
+        }
+        self.terminals.remove(idx);
+        if self.terminals.is_empty() {
+            self.active_tab = None;
+            self.terminal_open = false;
+        } else {
+            self.active_tab = Some(idx.min(self.terminals.len() - 1));
+        }
+    }
+
+    /// Type `text` (with a trailing newline) into a session's terminal — the
+    /// `filament send` / auto-respond path. Falls back to the active tab.
+    fn send_to_terminal(&mut self, session_id: Option<&str>, text: &str) {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\n');
+        let idx = session_id
+            .and_then(|sid| {
+                self.terminals
+                    .iter()
+                    .position(|t| t.session_id.as_deref() == Some(sid))
+            })
+            .or(self.active_tab);
+        if let Some(tab) = idx.and_then(|i| self.terminals.get_mut(i)) {
+            let _ = tab.term.handle(iced_term::Command::ProxyToBackend(
+                iced_term::BackendCommand::Write(bytes),
+            ));
         }
     }
 
@@ -333,9 +504,8 @@ impl App {
                 if self.section != section {
                     self.section = section;
                     self.mode = Mode::Inspect;
-                    // First time entering Sessions: kick a GitHub sync.
+                    // First time entering Sessions: kick a provider sync.
                     if section == Section::Sessions
-                        && self.sessions.gh_present
                         && self.sessions.gh == sessions::GhStatus::Unknown
                         && self.sessions.repo_root.is_some()
                     {
@@ -345,12 +515,13 @@ impl App {
             }
             Message::Sessions(msg) => return self.update_sessions(msg),
             Message::Pref(msg) => self.update_prefs(msg),
+            Message::Cfg(msg) => return self.update_cfg(msg),
 
             Message::ToggleTerminal => {
                 if self.terminal_open {
-                    // Visible (a live terminal or an error notice) → hide it.
+                    // Visible (live terminals or an error notice) → hide it.
                     self.terminal_open = false;
-                } else if self.terminal.is_some() {
+                } else if !self.terminals.is_empty() || self.terminal_error.is_some() {
                     // Hidden but still alive → reveal it.
                     self.terminal_open = true;
                 } else {
@@ -363,15 +534,29 @@ impl App {
                 let cwd = self.active_cwd();
                 return self.open_claude(cwd);
             }
-            Message::Terminal(iced_term::Event::BackendCall(_, cmd)) => {
-                if let Some(term) = &mut self.terminal {
-                    let action = term.handle(iced_term::Command::ProxyToBackend(cmd));
+            Message::OpenManager => return self.open_manager(),
+            Message::SelectTab(idx) => {
+                if idx < self.terminals.len() {
+                    self.active_tab = Some(idx);
+                    self.terminal_open = true;
+                }
+            }
+            Message::CloseTab(id) => self.close_tab(id),
+            Message::Terminal(iced_term::Event::BackendCall(id, cmd)) => {
+                if let Some(tab) = self.terminals.iter_mut().find(|t| t.id == id) {
+                    let action = tab.term.handle(iced_term::Command::ProxyToBackend(cmd));
                     if matches!(action, iced_term::actions::Action::Shutdown) {
-                        self.terminal = None;
-                        self.terminal_open = false;
+                        self.close_tab(id);
                     }
                 }
             }
+            Message::PollTick => {
+                if self.sessions.repo_root.is_some() && self.sessions.busy.is_none() {
+                    return self.refresh_sessions();
+                }
+            }
+            Message::Ipc(signal) => return self.handle_ipc(signal),
+            Message::DismissNotice => self.notice = None,
 
             Message::EnterEditAgent => {
                 let st = self.selected_entry().and_then(editor::AgentEdit::new);
@@ -436,6 +621,120 @@ impl App {
             }
         }
         self.prefs.save();
+    }
+
+    fn update_cfg(&mut self, msg: CfgMsg) -> Task<Message> {
+        match msg {
+            CfgMsg::SetProvider(p) => self.config.default_provider = p,
+            CfgMsg::SetTaskProvider(p) => self.config.default_task_provider = p,
+            CfgMsg::SetBranchPrefix(s) => self.config.branch_prefix = s,
+            CfgMsg::SetGitlabHost(s) => self.config.gitlab_host = s,
+            CfgMsg::SetDevRoot(s) => {
+                self.config.dev_root = (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()));
+                self.config.dev_root_buf = s;
+            }
+            CfgMsg::SetPollSeconds(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    self.config.poll_seconds = 0;
+                } else if let Ok(n) = t.parse() {
+                    self.config.poll_seconds = n;
+                }
+                self.config.poll_buf = s;
+            }
+            CfgMsg::SetExcludeReview(s) => {
+                self.config.exclude_review_repos = split_csv(&s);
+                self.config.exclude_review_buf = s;
+            }
+            CfgMsg::SetExcludeTicket(s) => {
+                self.config.exclude_ticket_repos = split_csv(&s);
+                self.config.exclude_ticket_buf = s;
+            }
+            CfgMsg::SetAutoLabel(s) => self.config.automation.auto_label = s,
+            CfgMsg::SetMergeLabel(s) => self.config.automation.merge_label = s,
+            CfgMsg::SetJiraSite(s) => self.config.jira.site_url = s,
+            CfgMsg::SetJiraProject(s) => self.config.jira.project_key = s,
+            CfgMsg::Toggle(flag, v) => {
+                let a = &mut self.config.automation;
+                match flag {
+                    AutoFlag::Create => a.auto_create = v,
+                    AutoFlag::SuggestPr => a.suggest_pr = v,
+                    AutoFlag::StartReview => a.auto_start_review = v,
+                    AutoFlag::RespondChanges => a.respond_changes_requested = v,
+                    AutoFlag::RespondCi => a.respond_failed_ci = v,
+                    AutoFlag::Merge => a.auto_merge = v,
+                    AutoFlag::Complete => a.auto_complete = v,
+                    AutoFlag::ManagerAuto => a.manager_auto_permission = v,
+                    AutoFlag::RemoteControl => a.remote_control = v,
+                }
+            }
+            CfgMsg::MarkInitialized => self.config.initialized = true,
+        }
+        let _ = self.config.save();
+        Task::none()
+    }
+
+    /// Act on a [`ipc::Signal`] forwarded from the IPC server.
+    fn handle_ipc(&mut self, signal: ipc::Signal) -> Task<Message> {
+        match signal {
+            ipc::Signal::Refresh => self.sessions.reload(),
+            ipc::Signal::Select { session } => {
+                self.section = Section::Sessions;
+                self.sessions.reload();
+                if self.sessions.store.get(&session).is_some() {
+                    self.sessions.selected = Some(session);
+                }
+            }
+            ipc::Signal::OpenTerminal { session, terminal } => {
+                self.sessions.reload();
+                return self.open_session_terminal(&session, &terminal);
+            }
+            ipc::Signal::CloseTerminal { terminal, .. } => {
+                if let Some(id) = self
+                    .terminals
+                    .iter()
+                    .find(|t| t.uid.as_deref() == Some(&terminal))
+                    .map(|t| t.id)
+                {
+                    self.close_tab(id);
+                }
+                self.sessions.reload();
+            }
+            ipc::Signal::RenameTerminal { terminal, name, .. } => {
+                if let Some(tab) = self
+                    .terminals
+                    .iter_mut()
+                    .find(|t| t.uid.as_deref() == Some(&terminal))
+                {
+                    tab.label = name;
+                }
+                self.sessions.reload();
+            }
+            ipc::Signal::Send {
+                session,
+                terminal,
+                text,
+            } => {
+                let idx = terminal.as_deref().and_then(|uid| {
+                    self.terminals
+                        .iter()
+                        .position(|t| t.uid.as_deref() == Some(uid))
+                });
+                if let Some(i) = idx {
+                    let mut bytes = text.into_bytes();
+                    bytes.push(b'\n');
+                    if let Some(tab) = self.terminals.get_mut(i) {
+                        let _ = tab.term.handle(iced_term::Command::ProxyToBackend(
+                            iced_term::BackendCommand::Write(bytes),
+                        ));
+                    }
+                } else {
+                    self.send_to_terminal(Some(&session), &text);
+                }
+            }
+            ipc::Signal::Hook { .. } => self.sessions.reload(),
+        }
+        Task::none()
     }
 
     fn save_edit(&mut self) {
@@ -510,7 +809,13 @@ impl App {
                 self.sessions.selected = Some(id);
                 self.sessions.compose = None;
                 self.sessions.error = None;
+                self.sessions.renaming = None;
+                self.sessions.confirming = None;
+                self.sessions.linking = None;
             }
+            SessionMsg::SetView(v) => self.sessions.view = v,
+            SessionMsg::FilterChanged(v) => self.sessions.filter = v,
+            SessionMsg::SetTicketStatus(s) => self.sessions.ticket_status = s,
             SessionMsg::ToggleNew => {
                 if self.sessions.compose.is_some() {
                     self.sessions.compose = None;
@@ -545,6 +850,7 @@ impl App {
             }
             SessionMsg::Create => return self.create_session(),
             SessionMsg::StartIssue(number) => return self.start_issue(number),
+            SessionMsg::StartReviewPr(number) => return self.start_review_pr(number),
             SessionMsg::Created(result) => {
                 self.sessions.busy = None;
                 match result {
@@ -559,17 +865,136 @@ impl App {
             }
             SessionMsg::OpenAgent(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
-                    self.sessions.selected = Some(id);
-                    return self.open_claude(Some(cwd));
+                    self.sessions.selected = Some(id.clone());
+                    let cwd = usable_cwd(Some(cwd));
+                    let label = label_for("claude", cwd.as_deref());
+                    let settings = terminal::agent_settings(cwd, self.term_opts());
+                    return self.open_terminal(settings, label, "claude", Some(id), None);
                 }
             }
             SessionMsg::OpenShell(id) => {
                 if let Some(cwd) = self.sessions.store.get(&id).map(|s| s.worktree.clone()) {
-                    self.sessions.selected = Some(id);
-                    return self.open_shell(Some(cwd));
+                    self.sessions.selected = Some(id.clone());
+                    let cwd = usable_cwd(Some(cwd));
+                    let label = label_for("shell", cwd.as_deref());
+                    let settings =
+                        terminal::shell_settings(cwd, &self.prefs.shell, self.term_opts());
+                    return self.open_terminal(settings, label, "shell", Some(id), None);
                 }
             }
-            SessionMsg::Delete(id) => return self.delete_session(id),
+            SessionMsg::SetStatus(id, state) => {
+                if let Some(s) = self.sessions.store.get_mut(&id) {
+                    if state == SessionState::Working {
+                        s.set_manual(None);
+                    } else {
+                        s.set_manual(Some(state));
+                    }
+                    let _ = self.sessions.store.save();
+                    self.sessions.reload();
+                }
+            }
+            SessionMsg::CopyBranch(branch) => {
+                self.notice = Some(format!("Copied branch: {branch}"));
+                return iced::clipboard::write(branch);
+            }
+            SessionMsg::CreatePr(id) => return self.create_pr(id),
+            SessionMsg::PrCreated(result) => {
+                self.sessions.busy = None;
+                match result {
+                    Ok(url) => {
+                        self.notice = Some(format!("Opened PR: {url}"));
+                        return self.refresh_sessions();
+                    }
+                    Err(e) => self.sessions.error = Some(e),
+                }
+            }
+            SessionMsg::RenameStart(id) => {
+                let title = self
+                    .sessions
+                    .store
+                    .get(&id)
+                    .map(|s| s.title.clone())
+                    .unwrap_or_default();
+                self.sessions.renaming = Some((id, title));
+            }
+            SessionMsg::RenameInput(v) => {
+                if let Some((_, buf)) = &mut self.sessions.renaming {
+                    *buf = v;
+                }
+            }
+            SessionMsg::RenameCommit => {
+                if let Some((id, buf)) = self.sessions.renaming.take() {
+                    let title = buf.trim().to_string();
+                    if !title.is_empty() {
+                        if let Some(s) = self.sessions.store.get_mut(&id) {
+                            s.title = title;
+                            let _ = self.sessions.store.save();
+                        }
+                    }
+                    self.sessions.reload();
+                }
+            }
+            SessionMsg::RenameCancel => self.sessions.renaming = None,
+            SessionMsg::AddLinkStart(id) => {
+                self.sessions.linking = Some(sessions::LinkForm {
+                    session: id,
+                    ..Default::default()
+                });
+            }
+            SessionMsg::LinkLabel(v) => {
+                if let Some(f) = &mut self.sessions.linking {
+                    f.label = v;
+                }
+            }
+            SessionMsg::LinkUrl(v) => {
+                if let Some(f) = &mut self.sessions.linking {
+                    f.url = v;
+                }
+            }
+            SessionMsg::LinkCommit => {
+                if let Some(f) = self.sessions.linking.take() {
+                    if !f.label.trim().is_empty() && !f.url.trim().is_empty() {
+                        if let Some(s) = self.sessions.store.get_mut(&f.session) {
+                            s.links.push(filament_core::SessionLink {
+                                label: f.label.trim().to_string(),
+                                url: f.url.trim().to_string(),
+                                kind: "link".into(),
+                            });
+                            let _ = self.sessions.store.save();
+                        }
+                    }
+                    self.sessions.reload();
+                }
+            }
+            SessionMsg::LinkCancel => self.sessions.linking = None,
+            SessionMsg::RemoveLink(idx) => {
+                if let Some(id) = self.sessions.selected.clone() {
+                    if let Some(s) = self.sessions.store.get_mut(&id) {
+                        if idx < s.links.len() {
+                            s.links.remove(idx);
+                            let _ = self.sessions.store.save();
+                        }
+                    }
+                    self.sessions.reload();
+                }
+            }
+            SessionMsg::ToggleMark(id) => {
+                if !self.sessions.marked.remove(&id) {
+                    self.sessions.marked.insert(id);
+                }
+            }
+            SessionMsg::ClearMarks => self.sessions.marked.clear(),
+            SessionMsg::DeleteMarked => return self.delete_marked(),
+            SessionMsg::AskDelete(id) => self.sessions.confirming = Some(id),
+            SessionMsg::CancelDelete => self.sessions.confirming = None,
+            SessionMsg::Delete(id) => {
+                self.sessions.confirming = None;
+                return self.delete_session(id, true);
+            }
+            SessionMsg::RemoveOnly(id) => {
+                self.sessions.confirming = None;
+                return self.delete_session(id, false);
+            }
             SessionMsg::Deleted(result) => {
                 self.sessions.busy = None;
                 match result {
@@ -581,11 +1006,15 @@ impl App {
                 }
             }
             SessionMsg::Refresh => return self.refresh_sessions(),
-            SessionMsg::Refreshed(status, issues) => {
+            SessionMsg::Refreshed(status, issues, review_prs, notice) => {
                 self.sessions.gh = status;
                 self.sessions.issues = issues;
+                self.sessions.review_prs = review_prs;
                 self.sessions.reload();
                 self.sessions.busy = None;
+                if notice.is_some() {
+                    self.notice = notice;
+                }
             }
             SessionMsg::AdoptOrphans => return self.adopt_orphans(),
             SessionMsg::Adopted => {
@@ -647,21 +1076,30 @@ impl App {
             return Task::none();
         };
         let store_path = self.sessions.store.path.clone();
-        let gh_present = self.sessions.gh_present;
         let now = now_unix();
+        let prefix = self.config.branch_prefix_for(&repo);
+        let provider = self.config.provider_for(&repo);
+        let task_provider = self.config.task_provider_for(&repo);
+        let host = self.config.host_for(&repo);
+        let jira = self.config.jira.clone();
         self.sessions.busy = Some("Creating session…".into());
         self.sessions.error = None;
         run_async(move || {
             let mut store = SessionStore::load_at(store_path);
-            let issue = (gh_present && !form.issue_url.trim().is_empty())
-                .then(|| github::view_issue(&repo, form.issue_url.trim()).ok())
+            let key = form.issue_url.trim();
+            let issue = (!key.is_empty())
+                .then(|| {
+                    provider::view_issue(task_provider, &repo, host.as_deref(), &jira, key).ok()
+                })
                 .flatten();
             let req = NewSession {
                 title: form.title.clone(),
                 base_branch: form.base.clone(),
                 issue,
+                provider,
+                task_provider,
             };
-            let result = match session::create_session(&mut store, &repo, req, now) {
+            let result = match session::create_session(&mut store, &repo, req, &prefix, now) {
                 Ok(s) => {
                     let _ = store.save();
                     Ok(s.id)
@@ -693,6 +1131,9 @@ impl App {
             .or_else(|| self.sessions.branches.first().cloned())
             .unwrap_or_else(|| "main".into());
         let now = now_unix();
+        let prefix = self.config.branch_prefix_for(&repo);
+        let provider = self.config.provider_for(&repo);
+        let task_provider = self.config.task_provider_for(&repo);
         self.sessions.busy = Some(format!("Creating session for #{number}…"));
         self.sessions.error = None;
         run_async(move || {
@@ -701,8 +1142,10 @@ impl App {
                 title: issue.title.clone(),
                 base_branch: base,
                 issue: Some(issue),
+                provider,
+                task_provider,
             };
-            let result = match session::create_session(&mut store, &repo, req, now) {
+            let result = match session::create_session(&mut store, &repo, req, &prefix, now) {
                 Ok(s) => {
                     let _ = store.save();
                     Ok(s.id)
@@ -713,7 +1156,7 @@ impl App {
         })
     }
 
-    fn delete_session(&mut self, id: String) -> Task<Message> {
+    fn delete_session(&mut self, id: String, delete_worktree: bool) -> Task<Message> {
         let store_path = self.sessions.store.path.clone();
         if self.sessions.selected.as_deref() == Some(&id) {
             self.sessions.selected = None;
@@ -722,11 +1165,90 @@ impl App {
         self.sessions.error = None;
         run_async(move || {
             let mut store = SessionStore::load_at(store_path);
-            let result = session::remove_session(&mut store, &id, true).map_err(|e| e.to_string());
+            let result = session::remove_session(&mut store, &id, delete_worktree)
+                .map_err(|e| e.to_string());
             if result.is_ok() {
                 let _ = store.save();
             }
             Message::Sessions(SessionMsg::Deleted(result))
+        })
+    }
+
+    fn delete_marked(&mut self) -> Task<Message> {
+        let ids: Vec<String> = self.sessions.marked.iter().cloned().collect();
+        if ids.is_empty() {
+            return Task::none();
+        }
+        let store_path = self.sessions.store.path.clone();
+        self.sessions.marked.clear();
+        self.sessions.busy = Some(format!("Removing {} session(s)…", ids.len()));
+        self.sessions.error = None;
+        run_async(move || {
+            let mut store = SessionStore::load_at(store_path);
+            for id in ids {
+                let _ = session::remove_session(&mut store, &id, true);
+            }
+            let _ = store.save();
+            Message::Sessions(SessionMsg::Deleted(Ok(())))
+        })
+    }
+
+    fn start_review_pr(&mut self, number: u64) -> Task<Message> {
+        let Some(repo) = self.sessions.repo_root.clone() else {
+            return Task::none();
+        };
+        let Some(pr) = self
+            .sessions
+            .review_prs
+            .iter()
+            .find(|p| p.number == number)
+            .cloned()
+        else {
+            return Task::none();
+        };
+        let Some(branch) = pr.head.clone() else {
+            self.sessions.error = Some("PR head branch unknown — Refresh and try again.".into());
+            return Task::none();
+        };
+        let store_path = self.sessions.store.path.clone();
+        let provider = self.config.provider_for(&repo);
+        let now = now_unix();
+        self.sessions.busy = Some(format!("Starting review of #{number}…"));
+        self.sessions.error = None;
+        run_async(move || {
+            let mut store = SessionStore::load_at(store_path);
+            let result =
+                match session::create_review_session(&mut store, &repo, &branch, pr, provider, now)
+                {
+                    Ok(s) => {
+                        let _ = store.save();
+                        Ok(s.id)
+                    }
+                    Err(e) => Err(e.to_string()),
+                };
+            Message::Sessions(SessionMsg::Created(result))
+        })
+    }
+
+    fn create_pr(&mut self, id: String) -> Task<Message> {
+        let Some(repo) = self.sessions.repo_root.clone() else {
+            return Task::none();
+        };
+        let Some((provider, branch, title)) = self
+            .sessions
+            .store
+            .get(&id)
+            .map(|s| (s.provider, s.branch.clone(), s.title.clone()))
+        else {
+            return Task::none();
+        };
+        let host = self.config.host_for(&repo);
+        self.sessions.busy = Some("Opening PR…".into());
+        self.sessions.error = None;
+        run_async(move || {
+            let res = provider::create_pr(provider, &repo, host.as_deref(), &branch, &title, false)
+                .map_err(|e| e.to_string());
+            Message::Sessions(SessionMsg::PrCreated(res))
         })
     }
 
@@ -735,21 +1257,23 @@ impl App {
             return Task::none();
         };
         let store_path = self.sessions.store.path.clone();
-        let gh_present = self.sessions.gh_present;
-        self.sessions.busy = Some("Syncing with GitHub…".into());
+        let task_provider = self.config.task_provider_for(&repo);
+        let code_provider = self.config.provider_for(&repo);
+        let host = self.config.host_for(&repo);
+        let jira = self.config.jira.clone();
+        let config = self.config.clone();
+        let now = now_unix();
+        self.sessions.busy = Some("Syncing…".into());
         run_async(move || {
-            if !gh_present {
-                return Message::Sessions(SessionMsg::Refreshed(
-                    sessions::GhStatus::NotInstalled,
-                    Vec::new(),
-                ));
-            }
             let mut store = SessionStore::load_at(store_path);
-            let issues_res = github::list_open_issues(&repo, 50);
+            let issues_res =
+                provider::list_open_issues(task_provider, &repo, host.as_deref(), &jira, 50);
             let status = match &issues_res {
                 Ok(_) => sessions::GhStatus::Ready,
-                Err(GhError::NotInstalled) => sessions::GhStatus::NotInstalled,
-                Err(GhError::NotAuthenticated) => sessions::GhStatus::NotAuthenticated,
+                Err(provider::ProviderError::NotInstalled) => sessions::GhStatus::NotInstalled,
+                Err(provider::ProviderError::NotAuthenticated) => {
+                    sessions::GhStatus::NotAuthenticated
+                }
                 Err(e) => sessions::GhStatus::Error(e.to_string()),
             };
             let issues = issues_res.unwrap_or_default();
@@ -757,16 +1281,22 @@ impl App {
             if status == sessions::GhStatus::Ready {
                 let ids: Vec<String> = store.for_repo(&repo).map(|s| s.id.clone()).collect();
                 for id in ids {
-                    let Some((branch, issue_key)) = store.get(&id).map(|s| {
+                    let Some((branch, prov, tprov, issue_key)) = store.get(&id).map(|s| {
                         (
                             s.branch.clone(),
+                            s.provider,
+                            s.task_provider,
                             s.issue.as_ref().map(|i| i.number.to_string()),
                         )
                     }) else {
                         continue;
                     };
-                    let pr = github::pr_for_branch(&repo, &branch).ok().flatten();
-                    let issue = issue_key.and_then(|k| github::view_issue(&repo, &k).ok());
+                    let pr = provider::pr_for_branch(prov, &repo, host.as_deref(), &branch)
+                        .ok()
+                        .flatten();
+                    let issue = issue_key.and_then(|k| {
+                        provider::view_issue(tprov, &repo, host.as_deref(), &jira, &k).ok()
+                    });
                     if let Some(s) = store.get_mut(&id) {
                         if pr.is_some() {
                             s.pr = pr;
@@ -774,12 +1304,24 @@ impl App {
                         if issue.is_some() {
                             s.issue = issue;
                         }
-                        s.state = s.derive_state();
+                        s.sync_state();
+                        s.last_synced_unix = now;
                     }
                 }
                 let _ = store.save();
             }
-            Message::Sessions(SessionMsg::Refreshed(status, issues))
+
+            // Open PRs for the review board.
+            let review_prs = if status == sessions::GhStatus::Ready {
+                provider::list_review_prs(code_provider, &repo, host.as_deref(), 50)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let notice = apply_automation(&mut store, &repo, &issues, &config, now);
+            let _ = store.save();
+            Message::Sessions(SessionMsg::Refreshed(status, issues, review_prs, notice))
         })
     }
 
@@ -817,10 +1359,13 @@ impl App {
                     widgets::scroll(container(w.view(&theme)).padding(th::PAD_PANE), &theme).into()
                 }
             },
-            Section::Sessions => self.sessions.detail(&theme),
-            Section::Settings => {
-                settingsview::view(&self.prefs, &theme, self.sessions.repo_root.as_deref())
-            }
+            Section::Sessions => self.sessions.detail(&self.config, &theme),
+            Section::Settings => settingsview::view(
+                &self.prefs,
+                &self.config,
+                &theme,
+                self.sessions.repo_root.as_deref(),
+            ),
         };
 
         // Right pane: the detail/editor in a glass panel, terminal docked below.
@@ -831,8 +1376,8 @@ impl App {
             .style(widgets::panel(&theme));
 
         let docked: Option<Element<Message>> = if self.terminal_open {
-            if let Some(term) = &self.terminal {
-                Some(self.terminal_panel(term, &theme))
+            if !self.terminals.is_empty() {
+                Some(self.terminal_panel(&theme))
             } else {
                 self.terminal_error
                     .as_deref()
@@ -917,52 +1462,107 @@ impl App {
             .into()
     }
 
-    fn terminal_panel<'a>(
-        &'a self,
-        term: &'a iced_term::Terminal,
-        theme: &Theme,
-    ) -> Element<'a, Message> {
-        let muted = th::muted(theme);
+    fn terminal_panel<'a>(&'a self, theme: &Theme) -> Element<'a, Message> {
         let accent = theme.palette().primary;
+        let txt = theme.palette().text;
+        let muted = th::muted(theme);
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
         let shadow = th::panel_shadow();
-        let label = if self.terminal_label.is_empty() {
-            "Terminal".to_string()
-        } else {
-            self.terminal_label.clone()
-        };
 
-        let bar = container(
-            row![
-                icon::icon(icon::TERMINAL)
-                    .size(13)
-                    .style(move |_: &Theme| text::Style {
-                        color: Some(accent)
-                    }),
-                text(label)
+        // Tab strip across all terminals, with a close (×) on each.
+        let mut tabs =
+            row![icon::icon(icon::TERMINAL)
+                .size(13)
+                .style(move |_: &Theme| text::Style {
+                    color: Some(accent)
+                })]
+            .spacing(6)
+            .align_y(Center);
+        for (i, tab) in self.terminals.iter().enumerate() {
+            let active = self.active_tab == Some(i);
+            let id = tab.id;
+            let label = tab.label.clone();
+            let chip = button(
+                row![
+                    text(label).size(th::TEXT_META),
+                    button(icon::icon(icon::CLOSE).size(10))
+                        .padding(0)
+                        .on_press(Message::CloseTab(id))
+                        .style(|_t, _s| button::Style {
+                            background: None,
+                            text_color: Color::from_rgb(0.7, 0.4, 0.4),
+                            border: border::rounded(4),
+                            shadow: Shadow::default(),
+                            snap: true,
+                        }),
+                ]
+                .spacing(6)
+                .align_y(Center),
+            )
+            .padding(Padding {
+                top: 3.0,
+                right: 8.0,
+                bottom: 3.0,
+                left: 10.0,
+            })
+            .on_press(Message::SelectTab(i))
+            .style(move |_t, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                let bgc = if active {
+                    th::with_alpha(accent, 0.22)
+                } else if hovered {
+                    th::with_alpha(txt, 0.10)
+                } else {
+                    Color::TRANSPARENT
+                };
+                button::Style {
+                    background: Some(Background::Color(bgc)),
+                    text_color: if active {
+                        txt
+                    } else {
+                        th::with_alpha(txt, 0.75)
+                    },
+                    border: border::rounded(7),
+                    shadow: Shadow::default(),
+                    snap: true,
+                }
+            });
+            tabs = tabs.push(chip);
+        }
+        tabs = tabs.push(space().width(Fill));
+        tabs = tabs.push(widgets::icon_only(
+            icon::TERMINAL,
+            Message::ToggleTerminal,
+            theme,
+        ));
+
+        let bar = container(tabs)
+            .padding(Padding {
+                top: 5.0,
+                right: 6.0,
+                bottom: 5.0,
+                left: 12.0,
+            })
+            .width(Fill);
+
+        let inner: Element<Message> = match self.active_tab.and_then(|i| self.terminals.get(i)) {
+            Some(tab) => container(iced_term::TerminalView::show(&tab.term).map(Message::Terminal))
+                .padding(8)
+                .width(Fill)
+                .height(Fill)
+                .into(),
+            None => container(
+                text("No terminal")
                     .size(th::TEXT_META)
                     .style(move |_| text::Style { color: Some(muted) }),
-                space().width(Fill),
-                widgets::icon_only(icon::CLOSE, Message::ToggleTerminal, theme),
-            ]
-            .align_y(Center)
-            .spacing(8),
-        )
-        .padding(Padding {
-            top: 5.0,
-            right: 6.0,
-            bottom: 5.0,
-            left: 12.0,
-        })
-        .width(Fill);
+            )
+            .center_x(Fill)
+            .center_y(Fill)
+            .into(),
+        };
 
-        let view = container(iced_term::TerminalView::show(term).map(Message::Terminal))
-            .padding(8)
-            .width(Fill)
-            .height(Fill);
-
-        container(column![bar, rule::horizontal(1), view].height(Fill))
+        container(column![bar, rule::horizontal(1), inner].height(Fill))
             .clip(true)
             .height(Fill)
             .style(move |_| container::Style {
@@ -1224,10 +1824,40 @@ impl App {
                 .size(th::TEXT_META)
                 .style(move |_| text::Style { color: Some(muted) }),
             space().width(Fill),
-            right,
         ]
         .align_y(Center)
         .spacing(4);
+
+        let bar = match &self.notice {
+            Some(n) => {
+                let chip = button(
+                    row![
+                        icon::icon(icon::INFO).size(11),
+                        text(n.clone()).size(th::TEXT_META),
+                        icon::icon(icon::CLOSE).size(10),
+                    ]
+                    .spacing(6)
+                    .align_y(Center),
+                )
+                .padding(Padding {
+                    top: 3.0,
+                    right: 9.0,
+                    bottom: 3.0,
+                    left: 9.0,
+                })
+                .on_press(Message::DismissNotice)
+                .style(move |_t, _s| button::Style {
+                    background: Some(Background::Color(th::with_alpha(accent, 0.14))),
+                    text_color: accent,
+                    border: border::rounded(8),
+                    shadow: Shadow::default(),
+                    snap: true,
+                });
+                bar.push(chip).push(space().width(8.0))
+            }
+            None => bar,
+        };
+        let bar = bar.push(right).align_y(Center).spacing(4);
 
         if cfg!(target_os = "macos") {
             // The header *is* the title bar: flush with the top, full width, with
@@ -1362,6 +1992,113 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Split a comma-separated text field into trimmed, non-empty entries.
+fn split_csv(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Execute the enabled automation rules against `store` in the background (mutating
+/// the store and, for merge/create, calling git / the forge). Returns a short
+/// notice summarizing what happened. Respond / start-review actions are surfaced
+/// rather than executed here (they need the live terminals).
+fn apply_automation(
+    store: &mut SessionStore,
+    repo: &std::path::Path,
+    issues: &[filament_core::IssueRef],
+    config: &Config,
+    now: u64,
+) -> Option<String> {
+    let plan = automation::plan(store, repo, issues, config);
+    if plan.is_empty() {
+        return None;
+    }
+    let host = config.host_for(repo);
+    let mut applied = 0u32;
+    let mut surfaced = 0u32;
+    for action in plan.actions {
+        match action {
+            automation::AutoAction::Complete { session_id } => {
+                if let Some(s) = store.get_mut(&session_id) {
+                    s.set_manual(None);
+                    s.state = SessionState::Done;
+                    applied += 1;
+                }
+            }
+            automation::AutoAction::SuggestPr { session_id } => {
+                if let Some(s) = store.get_mut(&session_id) {
+                    s.pr_suggested = true;
+                    applied += 1;
+                }
+            }
+            automation::AutoAction::Merge { session_id } => {
+                if let Some((prov, branch)) = store
+                    .get(&session_id)
+                    .map(|s| (s.provider, s.branch.clone()))
+                {
+                    if provider::merge_pr(prov, repo, host.as_deref(), &branch).is_ok() {
+                        applied += 1;
+                    }
+                }
+            }
+            automation::AutoAction::CreateSession { issue } => {
+                let req = NewSession {
+                    title: issue.title.clone(),
+                    base_branch: git::default_branch(repo).unwrap_or_else(|| "main".into()),
+                    issue: Some(issue),
+                    provider: config.provider_for(repo),
+                    task_provider: config.task_provider_for(repo),
+                };
+                let prefix = config.branch_prefix_for(repo);
+                if session::create_session(store, repo, req, &prefix, now).is_ok() {
+                    applied += 1;
+                }
+            }
+            automation::AutoAction::StartReview { .. }
+            | automation::AutoAction::RespondChangesRequested { .. }
+            | automation::AutoAction::RespondFailedCi { .. } => surfaced += 1,
+        }
+    }
+    if applied == 0 && surfaced == 0 {
+        None
+    } else {
+        let mut parts = Vec::new();
+        if applied > 0 {
+            parts.push(format!("automation applied {applied} action(s)"));
+        }
+        if surfaced > 0 {
+            parts.push(format!("{surfaced} need attention"));
+        }
+        Some(parts.join("; "))
+    }
+}
+
+/// A timer subscription that emits [`Message::PollTick`] every `seconds`
+/// (disabled when `seconds == 0`). Keyed by the interval so it restarts when the
+/// poll setting changes.
+fn poll_subscription(seconds: u64) -> Subscription<Message> {
+    if seconds == 0 {
+        return Subscription::none();
+    }
+    Subscription::run_with(seconds, |secs: &u64| {
+        let secs = *secs;
+        iced::stream::channel(
+            4,
+            move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(Duration::from_secs(secs));
+                    if out.try_send(Message::PollTick).is_err() {
+                        break;
+                    }
+                });
+                std::future::pending::<()>().await;
+            },
+        )
+    })
 }
 
 /// Run blocking work (git / gh) off the UI thread and deliver its `Message`.

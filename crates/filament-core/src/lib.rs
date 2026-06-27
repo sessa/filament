@@ -10,19 +10,29 @@
 //! [`model::Catalog`]. Edits go through [`edit`], which rewrites only the changed
 //! frontmatter keys and writes atomically.
 
+pub mod automation;
+pub mod backend;
+pub mod config;
 pub mod discovery;
 pub mod edit;
 pub mod error;
 pub mod frontmatter;
 pub mod git;
 pub mod github;
+pub mod gitlab;
+pub mod ipc;
+pub mod jira;
 pub mod model;
 pub mod parse;
+pub mod provider;
 pub mod scope;
 pub mod session;
 pub mod validate;
 pub mod workspace;
 
+pub use automation::{AutoAction, AutomationPlan};
+pub use backend::{CodeProvider, TaskProvider};
+pub use config::{Automation, Config, JiraConfig, WorkspaceConfig};
 pub use error::{CoreError, ParseError};
 pub use git::{GitError, Worktree};
 pub use github::GhError;
@@ -34,7 +44,8 @@ pub use model::{
 };
 pub use scope::Scope;
 pub use session::{
-    CheckState, CheckSummary, IssueRef, NewSession, PrRef, Session, SessionState, SessionStore,
+    CheckState, CheckSummary, IssueRef, MergeReadiness, NewSession, PrRef, ProjectStatus, Session,
+    SessionLink, SessionState, SessionStore, TerminalRec,
 };
 pub use validate::{validate_agent, validate_skill, ValidationReport};
 pub use workspace::{DiscoveryOptions, Workspace};
