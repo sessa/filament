@@ -1111,7 +1111,7 @@ impl App {
                 top: 9.0,
                 right: 12.0,
                 bottom: 9.0,
-                left: 14.0,
+                left: header_left_inset(self.prefs.density.scale()),
             })
             .style(widgets::panel(theme))
             .into()
@@ -1156,6 +1156,30 @@ impl App {
             }
         }
     }
+}
+
+/// Left padding for the header bar.
+///
+/// On macOS the title bar is transparent and the content runs full-height behind
+/// it (see `window_settings` in `main`), so the native traffic-light buttons
+/// float over the top-left of the header. They sit a fixed distance from the
+/// window edge regardless of our UI scale, so reserve that space — converted
+/// from physical points into pre-scale logical points and offset by the frame
+/// padding already ahead of the header — so the title never sits under them.
+/// On every other platform the default padding applies.
+#[cfg(target_os = "macos")]
+fn header_left_inset(scale: f32) -> f32 {
+    /// Right edge of the traffic-light cluster, plus a small gap (window points).
+    const TRAFFIC_LIGHTS_PT: f32 = 80.0;
+    /// Outer content padding (`view`'s column) ahead of the header panel.
+    const FRAME_INSET: f32 = 10.0;
+    (TRAFFIC_LIGHTS_PT / scale - FRAME_INSET).max(14.0)
+}
+
+/// Left padding for the header bar (non-macOS: the default, no traffic lights).
+#[cfg(not(target_os = "macos"))]
+fn header_left_inset(_scale: f32) -> f32 {
+    14.0
 }
 
 /// A short label for the terminal header: `program · dirname`.
