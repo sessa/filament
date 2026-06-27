@@ -34,6 +34,37 @@ pub fn agent_settings(cwd: Option<PathBuf>, opts: TermOpts) -> Settings {
     settings("claude".to_string(), Vec::new(), cwd, opts)
 }
 
+/// A Claude Code session in `cwd` with explicit extra CLI arguments.
+pub fn claude_settings(cwd: Option<PathBuf>, opts: TermOpts, args: Vec<String>) -> Settings {
+    settings("claude".to_string(), args, cwd, opts)
+}
+
+/// The persistent **manager** Claude session — crow's orchestration terminal.
+/// Launches with `--permission-mode auto` for approval-free execution (or `plan`
+/// when auto-permission is off), and `--rc` when remote control is enabled.
+pub fn manager_settings(
+    cwd: Option<PathBuf>,
+    opts: TermOpts,
+    auto_permission: bool,
+    remote_control: bool,
+) -> Settings {
+    let mut args = vec![
+        "--permission-mode".to_string(),
+        if auto_permission { "auto" } else { "plan" }.to_string(),
+    ];
+    if remote_control {
+        args.push("--rc".to_string());
+    }
+    claude_settings(cwd, opts, args)
+}
+
+/// Run an explicit command line (split on spaces) in `cwd`.
+pub fn command_settings(cwd: Option<PathBuf>, opts: TermOpts, command: &str) -> Settings {
+    let mut parts = command.split_whitespace().map(|s| s.to_string());
+    let program = parts.next().unwrap_or_else(default_shell);
+    settings(program, parts.collect(), cwd, opts)
+}
+
 fn settings(program: String, args: Vec<String>, cwd: Option<PathBuf>, opts: TermOpts) -> Settings {
     Settings {
         font: FontSettings {

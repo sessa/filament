@@ -12,7 +12,9 @@ mod cli;
 mod editor;
 mod icon;
 mod inspector;
+mod ipc_server;
 mod prefs;
+mod scaffold;
 mod search;
 mod sessions;
 mod settingsview;
@@ -26,6 +28,12 @@ mod wizard;
 use app::App;
 
 fn main() -> iced::Result {
+    // `filament <subcommand> …` drives a running app over the IPC socket (crow's
+    // CLI surface) and exits without launching a second GUI.
+    if let Some(code) = cli::run_subcommand() {
+        std::process::exit(code);
+    }
+
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .theme(App::theme)
