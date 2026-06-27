@@ -826,10 +826,24 @@ impl App {
 
         let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
 
-        let content = column![self.header(&theme), body]
-            .spacing(10)
-            .padding(10)
-            .height(Fill);
+        // On macOS the header is flush with the top (it doubles as the title
+        // bar), so the body sits below a hairline divider and is inset on its
+        // own. Elsewhere the native title bar is above us, so the header is a
+        // normal inset panel with even padding around everything.
+        let content = if cfg!(target_os = "macos") {
+            column![
+                self.header(&theme),
+                rule::horizontal(1),
+                container(body).width(Fill).height(Fill).padding(10),
+            ]
+            .width(Fill)
+            .height(Fill)
+        } else {
+            column![self.header(&theme), body]
+                .spacing(10)
+                .padding(10)
+                .height(Fill)
+        };
 
         // Rounded glass frame: the visible "window", with soft corners over the
         // OS blur outside the radius.
@@ -1106,15 +1120,46 @@ impl App {
         .align_y(Center)
         .spacing(4);
 
-        container(bar)
-            .padding(Padding {
-                top: 9.0,
-                right: 12.0,
-                bottom: 9.0,
-                left: header_left_inset(self.prefs.density.scale()),
-            })
-            .style(widgets::panel(theme))
-            .into()
+        if cfg!(target_os = "macos") {
+            // The header *is* the title bar: flush with the top, full width, with
+            // the content cleared past the traffic lights and centered to sit
+            // beside them. Rounded only at the top so it follows the window's
+            // corners; a divider under it (added in `view`) separates the body.
+            let surface = th::surface_strong(theme);
+            container(bar)
+                .width(Fill)
+                .padding(Padding {
+                    top: 2.0,
+                    right: 12.0,
+                    bottom: 8.0,
+                    left: header_left_inset(self.prefs.density.scale()),
+                })
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(surface)),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: border::Radius {
+                            top_left: 16.0,
+                            top_right: 16.0,
+                            bottom_right: 0.0,
+                            bottom_left: 0.0,
+                        },
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            container(bar)
+                .padding(Padding {
+                    top: 9.0,
+                    right: 12.0,
+                    bottom: 9.0,
+                    left: 14.0,
+                })
+                .style(widgets::panel(theme))
+                .into()
+        }
     }
 
     fn detail(&self) -> Element<'_, Message> {
@@ -1158,22 +1203,19 @@ impl App {
     }
 }
 
-/// Left padding for the header bar.
+/// Left padding for the header bar so the title clears the traffic lights.
 ///
-/// On macOS the title bar is transparent and the content runs full-height behind
-/// it (see `window_settings` in `main`), so the native traffic-light buttons
-/// float over the top-left of the header. They sit a fixed distance from the
-/// window edge regardless of our UI scale, so reserve that space — converted
-/// from physical points into pre-scale logical points and offset by the frame
-/// padding already ahead of the header — so the title never sits under them.
-/// On every other platform the default padding applies.
+/// On macOS the title bar is dissolved into the glass and the header doubles as
+/// it (see `window_settings` in `main` and `App::header`), sitting flush with
+/// the window's left edge. The native traffic-light cluster lives there, a fixed
+/// distance from that edge regardless of our UI scale, so reserve that width —
+/// converted from physical window points into pre-scale logical points — plus a
+/// gap before the title. On every other platform the default padding applies.
 #[cfg(target_os = "macos")]
 fn header_left_inset(scale: f32) -> f32 {
-    /// Right edge of the traffic-light cluster, plus a small gap (window points).
-    const TRAFFIC_LIGHTS_PT: f32 = 80.0;
-    /// Outer content padding (`view`'s column) ahead of the header panel.
-    const FRAME_INSET: f32 = 10.0;
-    (TRAFFIC_LIGHTS_PT / scale - FRAME_INSET).max(14.0)
+    /// Right edge of the traffic-light cluster plus a gap, in window points.
+    const CLEAR_PT: f32 = 92.0;
+    CLEAR_PT / scale
 }
 
 /// Left padding for the header bar (non-macOS: the default, no traffic lights).
