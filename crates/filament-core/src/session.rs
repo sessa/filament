@@ -15,19 +15,26 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::backend::{CodeProvider, TaskProvider};
 use crate::git;
 
-/// Where a session sits in its lifecycle. Variant order is also column order in
-/// the board UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Where a session sits in its lifecycle. The first three variants are the
+/// board *pipeline* (their order is column order); `Paused` and `Archived` are
+/// manual side states matching crow's session statuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
     /// Active development; no open PR yet.
+    #[default]
     Working,
     /// A pull request is open and awaiting review/merge.
     Review,
     /// The PR merged or the issue closed.
     Done,
+    /// Manually paused.
+    Paused,
+    /// Manually archived (kept for reference, hidden from the active board).
+    Archived,
 }
 
 impl SessionState {
@@ -36,30 +43,134 @@ impl SessionState {
             SessionState::Working => "Working",
             SessionState::Review => "In Review",
             SessionState::Done => "Done",
+            SessionState::Paused => "Paused",
+            SessionState::Archived => "Archived",
         }
     }
 
-    pub const ALL: [SessionState; 3] = [
+    /// The lifecycle pipeline shown as board columns, in order.
+    pub const BOARD: [SessionState; 3] = [
         SessionState::Working,
         SessionState::Review,
         SessionState::Done,
     ];
+
+    /// Every state, for iteration.
+    pub const ALL: [SessionState; 5] = [
+        SessionState::Working,
+        SessionState::Review,
+        SessionState::Done,
+        SessionState::Paused,
+        SessionState::Archived,
+    ];
+
+    /// States a user can manually pin a session to (the rest are derived).
+    pub const MANUAL: [SessionState; 4] = [
+        SessionState::Working,
+        SessionState::Review,
+        SessionState::Paused,
+        SessionState::Archived,
+    ];
+
+    pub fn parse(s: &str) -> Option<SessionState> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "working" | "active" => Some(SessionState::Working),
+            "review" | "inreview" | "in-review" => Some(SessionState::Review),
+            "done" | "completed" | "complete" => Some(SessionState::Done),
+            "paused" | "pause" => Some(SessionState::Paused),
+            "archived" | "archive" => Some(SessionState::Archived),
+            _ => None,
+        }
+    }
 }
 
-/// A linked GitHub issue.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A project-board column (crow's pipeline: Backlog → Ready → In Progress →
+/// In Review → Done). Free-text statuses that don't map fall into [`ProjectStatus::Other`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectStatus {
+    Backlog,
+    Ready,
+    InProgress,
+    InReview,
+    Done,
+    Other(String),
+}
+
+impl ProjectStatus {
+    /// The five standard pipeline columns, in order.
+    pub const PIPELINE: [ProjectStatus; 5] = [
+        ProjectStatus::Backlog,
+        ProjectStatus::Ready,
+        ProjectStatus::InProgress,
+        ProjectStatus::InReview,
+        ProjectStatus::Done,
+    ];
+
+    /// Bucket a raw project-board status name into a pipeline column.
+    pub fn from_raw(raw: &str) -> ProjectStatus {
+        let norm: String = raw
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        match norm.as_str() {
+            "backlog" | "todo" | "new" | "open" => ProjectStatus::Backlog,
+            "ready" | "selected" | "uptonext" | "next" => ProjectStatus::Ready,
+            "inprogress" | "indevelopment" | "doing" | "started" => ProjectStatus::InProgress,
+            "inreview" | "codereview" | "review" | "reviewing" => ProjectStatus::InReview,
+            "done" | "closed" | "merged" | "shipped" | "complete" | "completed" => {
+                ProjectStatus::Done
+            }
+            _ if raw.trim().is_empty() => ProjectStatus::Backlog,
+            _ => ProjectStatus::Other(raw.trim().to_string()),
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            ProjectStatus::Backlog => "Backlog",
+            ProjectStatus::Ready => "Ready",
+            ProjectStatus::InProgress => "In Progress",
+            ProjectStatus::InReview => "In Review",
+            ProjectStatus::Done => "Done",
+            ProjectStatus::Other(s) => s,
+        }
+    }
+}
+
+/// A linked issue / ticket (GitHub, GitLab, or Jira).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct IssueRef {
     pub number: u64,
     pub title: String,
     pub url: String,
-    /// `OPEN` / `CLOSED` (as reported by `gh`).
+    /// `OPEN` / `CLOSED` (as reported by the provider).
     #[serde(default)]
     pub state: String,
+    /// Label names on the issue (for label-driven automation like `crow:auto`).
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// The issue's project-board status name, when known (drives the ticket board).
+    #[serde(default)]
+    pub project_status: Option<String>,
+    /// `owner/repo` (or Jira key prefix) the issue belongs to, for cross-repo boards.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 impl IssueRef {
     pub fn is_closed(&self) -> bool {
         self.state.eq_ignore_ascii_case("closed")
+    }
+
+    /// Whether the issue carries `label` (case-insensitive).
+    pub fn has_label(&self, label: &str) -> bool {
+        self.labels.iter().any(|l| l.eq_ignore_ascii_case(label))
+    }
+
+    /// The issue's project-board column, if a status is known.
+    pub fn status(&self) -> Option<ProjectStatus> {
+        self.project_status.as_deref().map(ProjectStatus::from_raw)
     }
 }
 
@@ -98,8 +209,8 @@ pub enum CheckState {
     None,
 }
 
-/// A linked GitHub pull request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A linked pull request (GitHub) or merge request (GitLab).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PrRef {
     pub number: u64,
     #[serde(default)]
@@ -115,6 +226,18 @@ pub struct PrRef {
     pub review_decision: Option<String>,
     #[serde(default)]
     pub checks: CheckSummary,
+    /// `MERGEABLE` / `CONFLICTING` / `UNKNOWN`, when known.
+    #[serde(default)]
+    pub mergeable: Option<String>,
+    /// `CLEAN` / `BLOCKED` / `DIRTY` / `BEHIND` / `UNSTABLE` …, when known.
+    #[serde(default)]
+    pub merge_state_status: Option<String>,
+    /// Label names on the PR (for label-driven automation like `crow:merge`).
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// The PR's head (source) branch, when known — needed to start a review worktree.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 impl PrRef {
@@ -124,10 +247,87 @@ impl PrRef {
     pub fn is_open(&self) -> bool {
         self.state.eq_ignore_ascii_case("open")
     }
+    pub fn is_closed(&self) -> bool {
+        self.state.eq_ignore_ascii_case("closed")
+    }
+    /// Whether git reports the branch as conflicting with its base.
+    pub fn is_conflicting(&self) -> bool {
+        self.mergeable
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("conflicting"))
+    }
+    /// Whether the PR is cleanly mergeable (no conflicts reported).
+    pub fn is_mergeable(&self) -> bool {
+        self.mergeable
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("mergeable"))
+    }
+    pub fn is_approved(&self) -> bool {
+        self.review_decision
+            .as_deref()
+            .is_some_and(|d| d.eq_ignore_ascii_case("approved"))
+    }
+    pub fn changes_requested(&self) -> bool {
+        self.review_decision
+            .as_deref()
+            .is_some_and(|d| d.eq_ignore_ascii_case("changes_requested"))
+    }
+    /// Whether the PR carries `label` (case-insensitive).
+    pub fn has_label(&self, label: &str) -> bool {
+        self.labels.iter().any(|l| l.eq_ignore_ascii_case(label))
+    }
+    /// A merge-readiness verdict for badges.
+    pub fn merge_readiness(&self) -> MergeReadiness {
+        if self.is_merged() {
+            MergeReadiness::Merged
+        } else if self.is_conflicting() {
+            MergeReadiness::Conflicting
+        } else if self.is_mergeable() {
+            MergeReadiness::Mergeable
+        } else {
+            MergeReadiness::Unknown
+        }
+    }
+}
+
+/// A single rolled-up merge-readiness verdict for badges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeReadiness {
+    Mergeable,
+    Conflicting,
+    Merged,
+    Unknown,
+}
+
+/// An arbitrary reference link attached to a session (crow's `add-link`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SessionLink {
+    pub label: String,
+    pub url: String,
+    /// A free-text kind ("design", "doc", "pr", …); defaults to "link".
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// A terminal tab belonging to a session (crow's per-session managed terminals).
+/// The live terminal lives in the UI; this is the persisted metadata so the CLI
+/// can list / rename / close terminals and they survive a restart.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TerminalRec {
+    /// Stable id used by the CLI (`--terminal <id>`).
+    pub id: String,
+    pub name: String,
+    pub cwd: PathBuf,
+    /// "claude" / "shell" / "manager".
+    #[serde(default)]
+    pub kind: String,
+    /// An explicit command to run instead of the default for `kind`.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 /// A single work session.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Session {
     /// Stable, unique slug used as the key and worktree directory name.
     pub id: String,
@@ -141,13 +341,38 @@ pub struct Session {
     #[serde(default)]
     pub pr: Option<PrRef>,
     pub state: SessionState,
+    /// A user-pinned state that overrides derivation (e.g. Paused/Archived/Review)
+    /// until the session auto-completes. `None` means "follow the PR/issue".
+    #[serde(default)]
+    pub manual_state: Option<SessionState>,
     /// Unix seconds; `0` when unknown.
     #[serde(default)]
     pub created_unix: u64,
+    /// When the GitHub/GitLab data was last synced (Unix seconds; `0` if never).
+    #[serde(default)]
+    pub last_synced_unix: u64,
+    /// Reference links attached to the session.
+    #[serde(default)]
+    pub links: Vec<SessionLink>,
+    /// Which forge drives this session's PR/CI.
+    #[serde(default)]
+    pub provider: CodeProvider,
+    /// Which tracker drives this session's issue/ticket.
+    #[serde(default)]
+    pub task_provider: TaskProvider,
+    /// Set once automation has suggested opening a PR, so it doesn't nag again.
+    #[serde(default)]
+    pub pr_suggested: bool,
+    /// Persisted terminal tabs for this session (the live terminals live in the UI).
+    #[serde(default)]
+    pub terminals: Vec<TerminalRec>,
 }
 
 impl Session {
-    /// Recompute the lifecycle state from the linked PR/issue.
+    /// The lifecycle state derived purely from the linked PR/issue (no manual
+    /// override applied). This is the board pipeline position. Completion on a
+    /// *closed issue* requires [`Self::has_work_evidence`] so a session attached
+    /// to an already-closed ticket isn't instantly marked done (matching crow).
     pub fn derive_state(&self) -> SessionState {
         if let Some(pr) = &self.pr {
             if pr.is_merged() {
@@ -158,11 +383,48 @@ impl Session {
             }
         }
         if let Some(issue) = &self.issue {
-            if issue.is_closed() {
+            if issue.is_closed() && self.has_work_evidence() {
                 return SessionState::Done;
             }
         }
         SessionState::Working
+    }
+
+    /// Whether the linked PR merged or the linked issue closed.
+    pub fn auto_completed(&self) -> bool {
+        self.pr.as_ref().is_some_and(|p| p.is_merged())
+            || self.issue.as_ref().is_some_and(|i| i.is_closed())
+    }
+
+    /// "Positive evidence" that real work happened in this session — used to
+    /// guard auto-completion so a freshly-created session attached to an already
+    /// closed issue isn't instantly marked done (matching crow).
+    pub fn has_work_evidence(&self) -> bool {
+        self.pr.is_some() || (self.branch != self.base_branch && !self.branch.is_empty())
+    }
+
+    /// The state to display: completion (with evidence) wins, then any manual
+    /// pin, then the derived pipeline position.
+    pub fn effective_state(&self) -> SessionState {
+        if let Some(m) = self.manual_state {
+            // A completing session overrides a manual pause/archive/review.
+            if self.auto_completed() && self.has_work_evidence() {
+                return SessionState::Done;
+            }
+            return m;
+        }
+        self.derive_state()
+    }
+
+    /// Recompute and store [`Self::effective_state`].
+    pub fn sync_state(&mut self) {
+        self.state = self.effective_state();
+    }
+
+    /// Pin (or, with `None`, unpin) a manual state and recompute.
+    pub fn set_manual(&mut self, state: Option<SessionState>) {
+        self.manual_state = state;
+        self.sync_state();
     }
 
     /// Whether the worktree directory still exists on disk.
@@ -172,11 +434,13 @@ impl Session {
 }
 
 /// A request to create a new session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewSession {
     pub title: String,
     pub base_branch: String,
     pub issue: Option<IssueRef>,
+    pub provider: CodeProvider,
+    pub task_provider: TaskProvider,
 }
 
 /// The on-disk store of all sessions across repos.
@@ -343,16 +607,19 @@ pub fn stem_for(req: &NewSession) -> String {
 
 /// Create a worktree + branch and register the session in `store`.
 ///
-/// The caller is responsible for persisting `store` afterwards. `now_unix` is
-/// injected (rather than read here) so this stays pure and testable.
+/// `branch_prefix` (e.g. `"feature/"`) is prepended to the generated branch
+/// name, matching crow's per-workspace `branchPrefix`. The caller is responsible
+/// for persisting `store` afterwards. `now_unix` is injected (rather than read
+/// here) so this stays pure and testable.
 pub fn create_session(
     store: &mut SessionStore,
     repo_root: &Path,
     req: NewSession,
+    branch_prefix: &str,
     now_unix: u64,
 ) -> Result<Session, git::GitError> {
     let stem = stem_for(&req);
-    let branch = unique_branch(repo_root, &stem);
+    let branch = unique_branch(repo_root, &format!("{}{stem}", branch_prefix.trim()));
     let id = store.unique_id(&slug(&stem, 48));
     let worktree = worktree_base(repo_root).join(&id);
 
@@ -372,8 +639,48 @@ pub fn create_session(
         issue: req.issue,
         pr: None,
         state: SessionState::Working,
+        manual_state: None,
         created_unix: now_unix,
+        last_synced_unix: 0,
+        links: Vec::new(),
+        provider: req.provider,
+        task_provider: req.task_provider,
+        pr_suggested: false,
+        terminals: Vec::new(),
     };
+    store.upsert(session.clone());
+    Ok(session)
+}
+
+/// Create a session for reviewing an existing PR: a worktree on the PR's
+/// **existing** head `branch` (not a fresh branch), pinned to the Review state.
+pub fn create_review_session(
+    store: &mut SessionStore,
+    repo_root: &Path,
+    branch: &str,
+    pr: PrRef,
+    provider: CodeProvider,
+    now_unix: u64,
+) -> Result<Session, git::GitError> {
+    let stem = slug(&format!("review-{}", pr.number), 48);
+    let id = store.unique_id(&stem);
+    let worktree = worktree_base(repo_root).join(&id);
+    git::add_worktree_existing(repo_root, &worktree, branch)?;
+
+    let mut session = Session {
+        id,
+        title: format!("Review #{}: {}", pr.number, pr.title),
+        repo_root: repo_root.to_path_buf(),
+        worktree,
+        branch: branch.to_string(),
+        base_branch: git::default_branch(repo_root).unwrap_or_else(|| "main".to_string()),
+        pr: Some(pr),
+        provider,
+        created_unix: now_unix,
+        ..Session::default()
+    };
+    session.manual_state = Some(SessionState::Review);
+    session.sync_state();
     store.upsert(session.clone());
     Ok(session)
 }
@@ -437,10 +744,8 @@ pub fn adopt_orphan(
         worktree: worktree.path.clone(),
         branch,
         base_branch: git::default_branch(repo_root).unwrap_or_else(|| "main".to_string()),
-        issue: None,
-        pr: None,
-        state: SessionState::Working,
         created_unix: now_unix,
+        ..Session::default()
     };
     store.upsert(session.clone());
     session
@@ -464,15 +769,7 @@ mod tests {
         assert_eq!(store.unique_id("foo"), "foo");
         store.sessions.push(Session {
             id: "foo".into(),
-            title: "foo".into(),
-            repo_root: "/r".into(),
-            worktree: "/w".into(),
-            branch: "foo".into(),
-            base_branch: "main".into(),
-            issue: None,
-            pr: None,
-            state: SessionState::Working,
-            created_unix: 0,
+            ..Session::default()
         });
         assert_eq!(store.unique_id("foo"), "foo-2");
     }
@@ -487,15 +784,9 @@ mod tests {
     fn derive_state_follows_pr_and_issue() {
         let mut s = Session {
             id: "x".into(),
-            title: "x".into(),
-            repo_root: "/r".into(),
-            worktree: "/w".into(),
             branch: "b".into(),
             base_branch: "main".into(),
-            issue: None,
-            pr: None,
-            state: SessionState::Working,
-            created_unix: 0,
+            ..Session::default()
         };
         assert_eq!(s.derive_state(), SessionState::Working);
         s.issue = Some(IssueRef {
@@ -503,6 +794,7 @@ mod tests {
             title: "t".into(),
             url: "u".into(),
             state: "CLOSED".into(),
+            ..IssueRef::default()
         });
         assert_eq!(s.derive_state(), SessionState::Done);
         s.pr = Some(PrRef {
@@ -510,13 +802,80 @@ mod tests {
             title: "p".into(),
             url: "u".into(),
             state: "OPEN".into(),
-            is_draft: false,
-            review_decision: None,
-            checks: CheckSummary::default(),
+            ..PrRef::default()
         });
         assert_eq!(s.derive_state(), SessionState::Review);
         s.pr.as_mut().unwrap().state = "MERGED".into();
         assert_eq!(s.derive_state(), SessionState::Done);
+    }
+
+    #[test]
+    fn effective_state_honors_manual_and_completion() {
+        let mut s = Session {
+            id: "x".into(),
+            branch: "feature".into(),
+            base_branch: "main".into(),
+            ..Session::default()
+        };
+        // Manual pin wins over derivation.
+        s.set_manual(Some(SessionState::Paused));
+        assert_eq!(s.state, SessionState::Paused);
+        // A merged PR (with work evidence) completes regardless of the pin.
+        s.pr = Some(PrRef {
+            number: 1,
+            state: "MERGED".into(),
+            ..PrRef::default()
+        });
+        assert_eq!(s.effective_state(), SessionState::Done);
+        s.sync_state();
+        assert_eq!(s.state, SessionState::Done);
+    }
+
+    #[test]
+    fn auto_complete_needs_work_evidence() {
+        // A brand-new session attached to an already-closed issue, with no PR and
+        // no branch divergence, must NOT auto-complete.
+        let s = Session {
+            id: "x".into(),
+            branch: "main".into(),
+            base_branch: "main".into(),
+            issue: Some(IssueRef {
+                number: 1,
+                state: "CLOSED".into(),
+                ..IssueRef::default()
+            }),
+            ..Session::default()
+        };
+        assert!(s.auto_completed());
+        assert!(!s.has_work_evidence());
+        assert_ne!(s.effective_state(), SessionState::Done);
+    }
+
+    #[test]
+    fn project_status_buckets() {
+        assert_eq!(
+            ProjectStatus::from_raw("In Progress"),
+            ProjectStatus::InProgress
+        );
+        assert_eq!(
+            ProjectStatus::from_raw("Code Review"),
+            ProjectStatus::InReview
+        );
+        assert_eq!(ProjectStatus::from_raw("To Do"), ProjectStatus::Backlog);
+        assert_eq!(
+            ProjectStatus::from_raw("Blocked"),
+            ProjectStatus::Other("Blocked".into())
+        );
+    }
+
+    #[test]
+    fn pr_merge_readiness() {
+        let pr = PrRef {
+            mergeable: Some("CONFLICTING".into()),
+            ..PrRef::default()
+        };
+        assert!(pr.is_conflicting());
+        assert_eq!(pr.merge_readiness(), MergeReadiness::Conflicting);
     }
 
     #[test]

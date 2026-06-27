@@ -191,6 +191,19 @@ pub fn add_worktree(repo: &Path, path: &Path, branch: &str, base: &str) -> Resul
     Ok(())
 }
 
+/// Create a worktree at `path` checking out the **existing** `branch` (used to
+/// review a PR). If the branch only exists on the remote, fetch it first.
+pub fn add_worktree_existing(repo: &Path, path: &Path, branch: &str) -> Result<(), GitError> {
+    let p = path.to_string_lossy();
+    if let Err(e) = run(repo, &["worktree", "add", p.as_ref(), branch]) {
+        // Maybe it's only on the remote — fetch and create a tracking branch.
+        let _ = run(repo, &["fetch", "origin", branch]);
+        let track = format!("origin/{branch}");
+        run(repo, &["worktree", "add", "-b", branch, p.as_ref(), &track]).map_err(|_| e)?;
+    }
+    Ok(())
+}
+
 /// Remove the worktree at `path` (use `force` to discard uncommitted changes).
 pub fn remove_worktree(repo: &Path, path: &Path, force: bool) -> Result<(), GitError> {
     let p = path.to_string_lossy();
