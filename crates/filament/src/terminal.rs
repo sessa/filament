@@ -32,12 +32,18 @@ pub fn shell_settings(cwd: Option<PathBuf>, shell: &str, opts: TermOpts) -> Sett
 
 /// An interactive Claude Code session in `cwd`.
 pub fn agent_settings(cwd: Option<PathBuf>, opts: TermOpts) -> Settings {
-    settings("claude".to_string(), Vec::new(), cwd, opts)
+    settings("claude".to_string(), claude_base_args(), cwd, opts)
 }
 
 /// A Claude Code session in `cwd` with explicit extra CLI arguments.
 pub fn claude_settings(cwd: Option<PathBuf>, opts: TermOpts, args: Vec<String>) -> Settings {
-    settings("claude".to_string(), args, cwd, opts)
+    let mut base = claude_base_args();
+    base.extend(args);
+    settings("claude".to_string(), base, cwd, opts)
+}
+
+fn claude_base_args() -> Vec<String> {
+    vec!["--no-color".to_string()]
 }
 
 /// The persistent **manager** Claude session — crow's orchestration terminal.
