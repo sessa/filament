@@ -18,12 +18,12 @@ const PAD_PILL: Padding = Padding {
 
 /// A rounded, tinted label chip.
 pub fn pill<'a>(label: impl text::IntoFragment<'a>, fg: Color, bg: Color) -> Element<'a, Message> {
-    container(text(label).size(11))
+    container(text(label).size(th::TEXT_LABEL))
         .padding(PAD_PILL)
         .style(move |_theme| container::Style {
             background: Some(Background::Color(bg)),
             text_color: Some(fg),
-            border: border::rounded(7),
+            border: border::rounded(th::RADIUS_CHIP),
             ..container::Style::default()
         })
         .into()
@@ -38,10 +38,10 @@ pub fn kv_pill<'a>(key: &'a str, value: &'a str, theme: &Theme) -> Element<'a, M
     container(
         row![
             text(key)
-                .size(11)
+                .size(th::TEXT_LABEL)
                 .style(move |_| text::Style { color: Some(muted) }),
             text(value)
-                .size(11)
+                .size(th::TEXT_LABEL)
                 .style(move |_| text::Style { color: Some(fg) }),
         ]
         .spacing(5),
@@ -52,7 +52,7 @@ pub fn kv_pill<'a>(key: &'a str, value: &'a str, theme: &Theme) -> Element<'a, M
         border: Border {
             color: bdr,
             width: 1.0,
-            radius: 7.0.into(),
+            radius: th::RADIUS_CHIP.into(),
         },
         ..container::Style::default()
     })
@@ -81,7 +81,7 @@ pub fn scope_pill<'a>(scope: Scope) -> Element<'a, Message> {
     let accent = th::scope_accent(scope);
     let label = row![
         icon::icon(icon::scope(scope)).size(10),
-        text(scope.label()).size(11)
+        text(scope.label()).size(th::TEXT_LABEL)
     ]
     .spacing(4);
     container(label)
@@ -89,7 +89,7 @@ pub fn scope_pill<'a>(scope: Scope) -> Element<'a, Message> {
         .style(move |_| container::Style {
             background: Some(Background::Color(th::with_alpha(accent, 0.15))),
             text_color: Some(accent),
-            border: border::rounded(7),
+            border: border::rounded(th::RADIUS_CHIP),
             ..container::Style::default()
         })
         .into()
@@ -97,15 +97,21 @@ pub fn scope_pill<'a>(scope: Scope) -> Element<'a, Message> {
 
 pub fn error_badge<'a>() -> Element<'a, Message> {
     let red = th::danger();
-    container(row![icon::icon(icon::WARNING).size(10), text("invalid").size(11)].spacing(4))
-        .padding(PAD_PILL)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(th::with_alpha(red, 0.15))),
-            text_color: Some(red),
-            border: border::rounded(7),
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        row![
+            icon::icon(icon::WARNING).size(10),
+            text("invalid").size(th::TEXT_LABEL)
+        ]
+        .spacing(4),
+    )
+    .padding(PAD_PILL)
+    .style(move |_| container::Style {
+        background: Some(Background::Color(th::with_alpha(red, 0.15))),
+        text_color: Some(red),
+        border: border::rounded(th::RADIUS_CHIP),
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// A reusable glass-panel container style (raised surface + hairline + shadow).
@@ -118,7 +124,7 @@ pub fn panel(theme: &Theme) -> impl Fn(&Theme) -> container::Style {
         border: Border {
             color: bdr,
             width: 1.0,
-            radius: 16.0.into(),
+            radius: th::RADIUS_PANEL.into(),
         },
         shadow,
         ..container::Style::default()
@@ -134,20 +140,20 @@ pub fn card<'a>(title: &'a str, body: Element<'a, Message>, theme: &Theme) -> El
     container(
         column![
             text(title.to_uppercase())
-                .size(11)
+                .size(th::TEXT_LABEL)
                 .style(move |_| text::Style { color: Some(muted) }),
             body,
         ]
         .spacing(10),
     )
-    .padding(16)
+    .padding(15)
     .width(Length::Fill)
     .style(move |_| container::Style {
         background: Some(Background::Color(surface)),
         border: Border {
             color: bdr,
             width: 1.0,
-            radius: 14.0.into(),
+            radius: th::RADIUS_CARD.into(),
         },
         shadow,
         ..container::Style::default()
@@ -161,14 +167,14 @@ pub fn card_titleless<'a>(body: Element<'a, Message>, theme: &Theme) -> Element<
     let bdr = th::hairline(theme);
     let shadow = th::card_shadow();
     container(body)
-        .padding(18)
+        .padding(16)
         .width(Length::Fill)
         .style(move |_| container::Style {
             background: Some(Background::Color(surface)),
             border: Border {
                 color: bdr,
                 width: 1.0,
-                radius: 14.0.into(),
+                radius: th::RADIUS_CARD.into(),
             },
             shadow,
             ..container::Style::default()
@@ -201,7 +207,7 @@ fn ghost(theme: &Theme) -> impl Fn(&Theme, button::Status) -> button::Style {
             border: Border {
                 color: bdr,
                 width: 1.0,
-                radius: 9.0.into(),
+                radius: th::RADIUS_CONTROL.into(),
             },
             shadow: Shadow::default(),
             snap: true,
@@ -217,7 +223,7 @@ pub fn icon_button<'a>(
     theme: &Theme,
 ) -> Element<'a, Message> {
     button(
-        row![icon::icon(glyph).size(14), text(label).size(13)]
+        row![icon::icon(glyph).size(13), text(label).size(th::TEXT_UI)]
             .spacing(7)
             .align_y(Center),
     )
@@ -229,7 +235,7 @@ pub fn icon_button<'a>(
 
 /// A compact icon-only ghost button.
 pub fn icon_only<'a>(glyph: char, msg: Message, theme: &Theme) -> Element<'a, Message> {
-    button(icon::icon(glyph).size(15))
+    button(icon::icon(glyph).size(14))
         .padding(Padding {
             top: 6.0,
             right: 8.0,
@@ -251,7 +257,7 @@ pub fn primary_button<'a>(
     let primary = theme.palette().primary;
     let shadow = th::soft_shadow();
     button(
-        row![icon::icon(glyph).size(14), text(label).size(13)]
+        row![icon::icon(glyph).size(13), text(label).size(th::TEXT_UI)]
             .spacing(7)
             .align_y(Center),
     )
@@ -266,7 +272,7 @@ pub fn primary_button<'a>(
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: Color::WHITE,
-            border: border::rounded(10),
+            border: border::rounded(th::RADIUS_CONTROL),
             shadow: if matches!(status, button::Status::Disabled) {
                 Shadow::default()
             } else {

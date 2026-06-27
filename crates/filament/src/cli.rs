@@ -28,6 +28,8 @@ pub struct Cli {
     pub start_terminal: bool,
     /// Start in the Sessions section (testing/screenshots).
     pub start_sessions: bool,
+    /// Start in the Settings section (testing/screenshots).
+    pub start_settings: bool,
 }
 
 impl Cli {
@@ -41,6 +43,7 @@ impl Cli {
         let mut start_wizard = false;
         let mut start_terminal = false;
         let mut start_sessions = false;
+        let mut start_settings = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -53,6 +56,7 @@ impl Cli {
                 "--wizard" => start_wizard = true,
                 "--terminal" => start_terminal = true,
                 "--sessions" => start_sessions = true,
+                "--settings" => start_settings = true,
                 "--no-user" => include_user = false,
                 other if !other.starts_with('-') && workspace.is_none() => {
                     workspace = Some(PathBuf::from(other));
@@ -75,6 +79,7 @@ impl Cli {
             start_wizard,
             start_terminal,
             start_sessions,
+            start_settings,
         }
     }
 

@@ -50,7 +50,7 @@ fn search_bar<'a>(query: &'a str, theme: &Theme) -> Element<'a, Message> {
             .style(move |_: &Theme| text::Style { color: Some(muted) }),
         text_input("Search…", query)
             .on_input(Message::SearchChanged)
-            .size(13)
+            .size(th::TEXT_UI)
             .padding(7)
             .width(Fill),
     ]
@@ -96,7 +96,7 @@ fn filter_chip<'a>(
     let primary = theme.palette().primary;
     let txt = theme.palette().text;
     let surface = th::surface(theme);
-    button(text(label).size(12))
+    button(text(label).size(th::TEXT_UI))
         .padding(Padding {
             top: 4.0,
             right: 11.0,
@@ -168,7 +168,7 @@ fn build_list<'a>(
         };
         col = col.push(
             text(message)
-                .size(13)
+                .size(th::TEXT_BODY)
                 .style(move |_| text::Style { color: Some(muted) }),
         );
     }
@@ -182,11 +182,11 @@ fn group_header<'a>(kind: ItemKind, count: usize, muted: Color) -> Element<'a, M
             .size(12)
             .style(move |_: &Theme| text::Style { color: Some(muted) }),
         text(kind.plural().to_uppercase())
-            .size(11)
+            .size(th::TEXT_LABEL)
             .style(move |_| text::Style { color: Some(muted) }),
         space().width(Fill),
         text(count.to_string())
-            .size(11)
+            .size(th::TEXT_LABEL)
             .style(move |_| text::Style { color: Some(muted) }),
     ]
     .align_y(Center)
@@ -229,7 +229,7 @@ fn entry_row<'a>(entry: &'a Entry, selected: bool, theme: &Theme) -> Element<'a,
     }
     line = line.push(
         text(entry.name.clone())
-            .size(14)
+            .size(th::TEXT_BODY)
             .width(Fill)
             .style(move |_| text::Style {
                 color: Some(name_color),

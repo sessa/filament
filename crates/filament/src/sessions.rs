@@ -50,6 +50,12 @@ pub enum SessionMsg {
     Adopted,
     /// Open a URL in the system browser.
     OpenUrl(String),
+    /// The repository path input changed.
+    RepoInputChanged(String),
+    /// Open the repository named in the path input.
+    OpenRepo,
+    /// Switch the active repository to a known path.
+    SetRepo(PathBuf),
 }
 
 /// Availability of the GitHub CLI, surfaced as a quiet hint in the UI.
@@ -97,6 +103,10 @@ pub struct SessionsState {
     pub compose: Option<NewForm>,
     pub busy: Option<String>,
     pub error: Option<String>,
+    /// Show sessions from every repo, not just the active one.
+    pub show_all: bool,
+    /// The repository path being typed in the "open repository" field.
+    pub repo_input: String,
 }
 
 impl SessionsState {
@@ -105,8 +115,10 @@ impl SessionsState {
     /// `workspace` is resolved to its enclosing git repository root when it sits
     /// inside one, so sessions attach to the repo regardless of which subdir the
     /// app was opened from.
-    pub fn load(workspace: Option<PathBuf>) -> SessionsState {
-        let repo_root = workspace.and_then(|w| git::repo_root(&w).or(Some(w)));
+    pub fn load(workspace: Option<PathBuf>, show_all: bool) -> SessionsState {
+        // Only resolve to a *real* git repo. Launched from a GUI, the working
+        // directory is often `/`, which is not a repo — never treat that as one.
+        let repo_root = workspace.and_then(|w| git::repo_root(&w));
         let store = SessionStore::load();
         let gh_present = github::cli_available();
         let (branches, default_branch, orphans) = match &repo_root {
@@ -117,9 +129,15 @@ impl SessionsState {
             ),
             None => (Vec::new(), None, Vec::new()),
         };
+        // Prefer a session in the active repo; otherwise the most recent session.
         let selected = repo_root
             .as_ref()
-            .and_then(|r| store.for_repo(r).next().map(|s| s.id.clone()));
+            .and_then(|r| store.for_repo(r).next().map(|s| s.id.clone()))
+            .or_else(|| store.sessions.first().map(|s| s.id.clone()));
+        let repo_input = repo_root
+            .as_ref()
+            .map(|r| r.display().to_string())
+            .unwrap_or_default();
         SessionsState {
             store,
             repo_root,
@@ -133,7 +151,38 @@ impl SessionsState {
             compose: None,
             busy: None,
             error: None,
+            show_all,
+            repo_input,
         }
+    }
+
+    /// Switch the active repository and recompute repo-derived state.
+    pub fn set_repo(&mut self, repo_root: Option<PathBuf>) {
+        self.repo_root = repo_root;
+        self.compose = None;
+        self.gh = GhStatus::Unknown;
+        if let Some(root) = &self.repo_root {
+            self.repo_input = root.display().to_string();
+        }
+        self.reload();
+    }
+
+    /// Distinct repositories that have sessions, plus the active one — for the
+    /// quick "switch repository" picker.
+    pub fn recent_repos(&self) -> Vec<PathBuf> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for repo in self
+            .repo_root
+            .iter()
+            .cloned()
+            .chain(self.store.sessions.iter().map(|s| s.repo_root.clone()))
+        {
+            if seen.insert(repo.clone()) {
+                out.push(repo);
+            }
+        }
+        out
     }
 
     /// Reload the store from disk and recompute repo-derived state.
@@ -146,22 +195,34 @@ impl SessionsState {
         }
     }
 
-    /// Sessions for the active repo, grouped into board columns.
+    /// Sessions grouped into board columns. When `show_all` is set (or there is
+    /// no active repo), every tracked session is shown so the user can always see
+    /// the agents they've had running; otherwise it's filtered to the active repo.
     fn columns(&self) -> Vec<(SessionState, Vec<&Session>)> {
-        let Some(root) = &self.repo_root else {
-            return SessionState::ALL.iter().map(|s| (*s, Vec::new())).collect();
+        let all = self.show_all || self.repo_root.is_none();
+        let in_scope = |s: &Session| -> bool {
+            all || self
+                .repo_root
+                .as_ref()
+                .is_some_and(|root| same_repo(&s.repo_root, root))
         };
         SessionState::ALL
             .iter()
             .map(|state| {
                 let items: Vec<&Session> = self
                     .store
-                    .for_repo(root)
-                    .filter(|s| s.state == *state)
+                    .sessions
+                    .iter()
+                    .filter(|s| s.state == *state && in_scope(s))
                     .collect();
                 (*state, items)
             })
             .collect()
+    }
+
+    /// Whether the board is currently showing sessions across repositories.
+    fn showing_all(&self) -> bool {
+        self.show_all || self.repo_root.is_none()
     }
 
     fn selected_session(&self) -> Option<&Session> {
@@ -220,6 +281,7 @@ impl SessionsState {
                 col = col.push(session_row(
                     s,
                     self.selected.as_deref() == Some(&s.id),
+                    self.showing_all(),
                     theme,
                 ));
             }
@@ -235,21 +297,32 @@ impl SessionsState {
         }
 
         if !any && tickets_empty(&self.issues, &self.store) {
+            let msg = if self.repo_root.is_some() {
+                "No sessions yet. Create one to pair a git worktree with Claude Code."
+            } else {
+                "No sessions yet. Open a git repository below, then create one to pair a worktree with Claude Code."
+            };
             col = col.push(
-                text("No sessions yet. Create one to pair a git worktree with Claude Code.")
-                    .size(13)
+                text(msg)
+                    .size(th::TEXT_BODY)
                     .style(move |_| text::Style { color: Some(muted) }),
             );
         }
 
-        let header = container(widgets::primary_button(
-            icon::NEW,
-            "New session",
-            self.repo_root
-                .is_some()
-                .then_some(Message::Sessions(SessionMsg::ToggleNew)),
-            theme,
-        ))
+        let header = container(
+            column![
+                widgets::primary_button(
+                    icon::NEW,
+                    "New session",
+                    self.repo_root
+                        .is_some()
+                        .then_some(Message::Sessions(SessionMsg::ToggleNew)),
+                    theme,
+                ),
+                self.repo_bar(theme),
+            ]
+            .spacing(8),
+        )
         .padding(Padding {
             top: 12.0,
             right: 10.0,
@@ -266,6 +339,83 @@ impl SessionsState {
         .height(Fill);
 
         column![header, list].height(Fill).into()
+    }
+
+    /// The active-repository control: current repo, a switcher across known
+    /// repos, and a path field to open another.
+    fn repo_bar<'a>(&'a self, theme: &Theme) -> Element<'a, Message> {
+        let muted = th::muted(theme);
+        let recent = self.recent_repos();
+
+        let current: Element<Message> = {
+            let label = match &self.repo_root {
+                Some(root) => format!("Repository · {}", repo_name(root)),
+                None => "No repository selected".to_string(),
+            };
+            row![
+                icon::icon(icon::FOLDER)
+                    .size(12)
+                    .style(move |_: &Theme| text::Style { color: Some(muted) }),
+                text(label)
+                    .size(th::TEXT_META)
+                    .width(Fill)
+                    .style(move |_| text::Style { color: Some(muted) }),
+            ]
+            .spacing(6)
+            .align_y(Center)
+            .into()
+        };
+
+        let switcher: Option<Element<Message>> = (recent.len() > 1).then(|| {
+            let options: Vec<RepoOption> = recent.iter().cloned().map(RepoOption).collect();
+            let selected = self.repo_root.clone().map(RepoOption);
+            iced::widget::pick_list(options, selected, |opt| {
+                Message::Sessions(SessionMsg::SetRepo(opt.0))
+            })
+            .text_size(th::TEXT_META)
+            .padding(6)
+            .width(Fill)
+            .into()
+        });
+
+        let open_row = row![
+            text_input("/path/to/repo", &self.repo_input)
+                .on_input(|s| Message::Sessions(SessionMsg::RepoInputChanged(s)))
+                .on_submit(Message::Sessions(SessionMsg::OpenRepo))
+                .size(th::TEXT_META)
+                .padding(6)
+                .width(Fill),
+            widgets::icon_button(
+                icon::FOLDER_OPEN,
+                "Open",
+                Message::Sessions(SessionMsg::OpenRepo),
+                theme,
+            ),
+        ]
+        .spacing(6)
+        .align_y(Center);
+
+        let mut col = column![current].spacing(7);
+        if let Some(sw) = switcher {
+            col = col.push(sw);
+        }
+        col = col.push(open_row);
+
+        let bg = th::surface(theme);
+        let bdr = th::hairline(theme);
+        container(col)
+            .padding(9)
+            .width(Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(bg)),
+                border: iced::Border {
+                    color: bdr,
+                    width: 1.0,
+                    radius: th::RADIUS_CARD.into(),
+                },
+                ..container::Style::default()
+            })
+            .into()
     }
 
     /// The right pane: the new-session form, the selected session, or a prompt.
@@ -289,10 +439,10 @@ impl SessionsState {
         container(
             column![
                 icon::icon(icon::SESSIONS)
-                    .size(40)
+                    .size(34)
                     .style(move |_: &Theme| text::Style { color: Some(muted) }),
                 text(msg)
-                    .size(14)
+                    .size(th::TEXT_BODY)
                     .style(move |_| text::Style { color: Some(muted) }),
             ]
             .spacing(14)
@@ -368,7 +518,7 @@ impl SessionsState {
         .spacing(14)
         .width(Fill);
 
-        let mut content = column![text("New session").size(16)]
+        let mut content = column![text("New session").size(th::TEXT_H2)]
             .spacing(16)
             .width(Fill);
         content = content.push(widgets::card_titleless(body.into(), theme));
@@ -393,7 +543,7 @@ impl SessionsState {
                 .style(move |_: &Theme| text::Style {
                     color: Some(accent)
                 }),
-            text(s.title.clone()).size(20).width(Fill),
+            text(s.title.clone()).size(th::TEXT_H2).width(Fill),
             widgets::pill(s.state.label(), accent, th::with_alpha(accent, 0.15)),
         ]
         .spacing(10)
@@ -520,6 +670,34 @@ impl SessionsState {
     }
 }
 
+/// The display name of a repository (its directory name, or full path if empty).
+fn repo_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Whether two repo paths refer to the same repository (canonicalized).
+fn same_repo(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(a) == canon(b)
+}
+
+/// A repository choice for the switcher `pick_list`, shown as `name — parent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoOption(pub PathBuf);
+
+impl std::fmt::Display for RepoOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = repo_name(&self.0);
+        match self.0.parent().and_then(|p| p.file_name()) {
+            Some(parent) => write!(f, "{name}  ·  {}", parent.to_string_lossy()),
+            None => f.write_str(&name),
+        }
+    }
+}
+
 fn tickets_empty(issues: &[IssueRef], store: &SessionStore) -> bool {
     let taken: std::collections::HashSet<u64> = store
         .sessions
@@ -534,7 +712,7 @@ fn tickets_empty(issues: &[IssueRef], store: &SessionStore) -> bool {
 fn state_color(state: SessionState, theme: &Theme) -> Color {
     match state {
         SessionState::Working => theme.palette().primary,
-        SessionState::Review => Color::from_rgb8(0xE0, 0xAF, 0x68),
+        SessionState::Review => th::amber(),
         SessionState::Done => Color::from_rgb8(0x9E, 0xCE, 0x6A),
     }
 }
@@ -566,7 +744,12 @@ fn group_header<'a>(
     .into()
 }
 
-fn session_row<'a>(s: &'a Session, selected: bool, theme: &Theme) -> Element<'a, Message> {
+fn session_row<'a>(
+    s: &'a Session,
+    selected: bool,
+    show_repo: bool,
+    theme: &Theme,
+) -> Element<'a, Message> {
     let base_text = theme.palette().text;
     let muted = th::muted(theme);
     let accent = theme.palette().primary;
@@ -578,11 +761,18 @@ fn session_row<'a>(s: &'a Session, selected: bool, theme: &Theme) -> Element<'a,
             .size(11)
             .style(move |_: &Theme| text::Style { color: Some(muted) }),
         text(s.branch.clone())
-            .size(11)
+            .size(th::TEXT_META)
             .style(move |_| text::Style { color: Some(muted) }),
     ]
     .spacing(5)
     .align_y(Center);
+    if show_repo {
+        meta = meta.push(
+            text(format!("· {}", repo_name(&s.repo_root)))
+                .size(th::TEXT_META)
+                .style(move |_| text::Style { color: Some(muted) }),
+        );
+    }
     if let Some(issue) = &s.issue {
         meta = meta.push(
             text(format!("#{}", issue.number))
@@ -600,9 +790,11 @@ fn session_row<'a>(s: &'a Session, selected: bool, theme: &Theme) -> Element<'a,
     }
 
     let body = column![
-        text(s.title.clone()).size(14).style(move |_| text::Style {
-            color: Some(base_text)
-        }),
+        text(s.title.clone())
+            .size(th::TEXT_BODY)
+            .style(move |_| text::Style {
+                color: Some(base_text)
+            }),
         meta,
     ]
     .spacing(3);
@@ -710,7 +902,7 @@ fn check_dot<'a>(state: CheckState, theme: &Theme) -> Element<'a, Message> {
     let (glyph, color) = match state {
         CheckState::Passing => (icon::CHECK_OK, state_color(SessionState::Done, theme)),
         CheckState::Failing => (icon::CHECK_FAIL, th::danger()),
-        CheckState::Pending => (icon::CLOCK, Color::from_rgb8(0xE0, 0xAF, 0x68)),
+        CheckState::Pending => (icon::CLOCK, th::amber()),
         CheckState::None => return space().width(0.0).into(),
     };
     icon::icon(glyph)
@@ -746,7 +938,7 @@ fn checks_badge<'a>(
         return widgets::pill("no checks", muted, th::with_alpha(muted, 0.12));
     }
     let green = state_color(SessionState::Done, theme);
-    let amber = Color::from_rgb8(0xE0, 0xAF, 0x68);
+    let amber = th::amber();
     let red = th::danger();
     let mut r = row![].spacing(8).align_y(Center);
     for part in [
@@ -805,7 +997,7 @@ fn banner<'a>(message: &'a str, fg: Color) -> Element<'a, Message> {
 }
 
 fn orphan_banner<'a>(label: String) -> Element<'a, Message> {
-    let amber = Color::from_rgb8(0xE0, 0xAF, 0x68);
+    let amber = th::amber();
     let line = row![
         text(label)
             .size(12)

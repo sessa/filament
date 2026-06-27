@@ -49,6 +49,14 @@ safely. Filament turns the whole config into a legible, editable dashboard.
   button) or any command, without leaving the app. *(Ghostty itself can't be
   embedded in an Iced/wgpu app yet — its renderer isn't released — so the
   terminal is Alacritty-backed.)*
+- **Appearance & settings** — a dedicated **Settings** section to tune the look
+  and feel: light/dark theme, an accent color (Claude coral by default), UI
+  **density** (a global zoom from Compact to Spacious), the terminal font size and
+  shell, and session defaults. Preferences persist in your OS data directory. The
+  palette and typography are tuned to sit comfortably alongside Claude Code —
+  warm, paper-and-ink neutrals rather than cold blue-grays.
+
+  ![Settings](docs/screenshot-app-settings.png)
 - **Live refresh** — external edits to your config files show up automatically,
   thanks to a debounced filesystem watcher.
 - **Invalid files don't break it** — a malformed file is listed with an error
@@ -69,12 +77,19 @@ task and run Claude Code in it.
 
 ![Sessions board](docs/screenshot-sessions.png)
 
+- **Pick a repository** — the board attaches to the git repository Filament was
+  opened in. When it's launched from somewhere that isn't a repo (e.g. a
+  double-clicked app bundle, whose working directory is `/`), it no longer guesses
+  — instead it offers an **Open repository** field and a quick switcher across the
+  repos you've worked in. The chosen repo is remembered between launches.
 - **New session** — give it a title and/or a GitHub issue URL and pick a base
   branch. Filament creates a worktree on a fresh branch (in a sibling
   `<repo>-worktrees/` directory) and registers the session.
 - **Board** — sessions are grouped **Working → In Review → Done**. The state is
   derived from the linked PR (open ⇒ In Review, merged ⇒ Done) and issue (closed
-  ⇒ Done) when GitHub data is available.
+  ⇒ Done) when GitHub data is available. By default the board shows **every
+  session you've run** across all repositories (toggle "Show all repositories" in
+  Settings to scope it to the active repo).
 - **Run Claude / Shell** — launch `claude` (or a plain shell) in the session's
   worktree, right in the embedded terminal — no `cd` dance.
 - **Tickets** — open GitHub issues without a session show up as tickets; "Start
@@ -136,7 +151,7 @@ libwayland-dev libfontconfig1-dev`.)
 
 ```text
 filament [PATH | --workspace <dir>] [--home <dir>] [--no-user]
-         [--select <name>] [--search <query>] [--sessions]
+         [--select <name>] [--search <query>] [--sessions] [--settings]
 ```
 
 - `--workspace <dir>` (or a bare path): the project to scan. Filament walks up to
@@ -167,8 +182,9 @@ A Cargo workspace with two crates:
   `session` model + JSON store, and `github` (`gh`-backed, gracefully degrading)
   integration. Fully unit-tested.
 - **`filament`** — the Iced desktop app: sidebar, inspector, editor, wizard,
-  theming, fuzzy search, the file-watch subscription, the embedded terminal, and
-  the Sessions board.
+  theming (warm Claude-tuned palette + a small type/spacing scale), persisted
+  preferences and a Settings screen, fuzzy search, the file-watch subscription,
+  the embedded terminal, and the Sessions board.
 
 The split keeps all parsing/editing logic fast to compile and testable headlessly.
 

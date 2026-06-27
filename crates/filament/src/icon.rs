@@ -45,6 +45,11 @@ pub const LINK: char = '\u{e5de}'; // arrow-square-out
 pub const FOLDER_OPEN: char = '\u{e256}'; // folder-open
 pub const ROCKET: char = '\u{e3fc}'; // rocket
 
+// Settings
+pub const PALETTE: char = '\u{e6c8}'; // palette
+pub const INFO: char = '\u{e2ce}'; // info
+pub const FOLDER: char = '\u{e25a}'; // folder-simple
+
 // Status / scope
 pub const WARNING: char = '\u{e4e0}'; // warning
 pub const PROJECT: char = '\u{e24a}'; // folder

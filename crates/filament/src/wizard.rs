@@ -115,7 +115,7 @@ impl Wizard {
         let muted = th::muted(theme);
         let kinds = vec![ItemKind::Agent, ItemKind::Skill, ItemKind::Command];
 
-        let mut col = column![text("Create a new item").size(20)]
+        let mut col = column![text("Create a new item").size(th::TEXT_H2)]
             .spacing(16)
             .width(Fill);
 
@@ -168,7 +168,7 @@ impl Wizard {
 fn field<'a>(label: &'a str, input: Element<'a, Message>, muted: Color) -> Element<'a, Message> {
     column![
         text(label)
-            .size(11)
+            .size(th::TEXT_LABEL)
             .style(move |_| text::Style { color: Some(muted) }),
         input,
     ]
