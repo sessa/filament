@@ -73,8 +73,13 @@ fn window_settings() -> iced::window::Settings {
     let settings = iced::window::Settings {
         size: iced::Size::new(1240.0, 820.0),
         min_size: Some(iced::Size::new(880.0, 580.0)),
-        transparent: true,
-        blur: true,
+        // DIAGNOSTIC (blank-terminal): the embedded iced_term renders via iced's
+        // canvas-geometry path while the rest of the UI uses the normal text
+        // path. Run an opaque window temporarily to isolate whether the
+        // transparent/PostMultiplied surface is eating the terminal's geometry
+        // layer. Restore to `true` once the cause is confirmed.
+        transparent: false,
+        blur: false,
         ..Default::default()
     };
 
