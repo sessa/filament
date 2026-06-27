@@ -2,7 +2,7 @@
 //! agents, skills, and commands render metadata + the markdown body; MCP servers
 //! show transport/endpoint/env; settings show permissions, hooks, and env.
 
-use iced::widget::{column, markdown, row, scrollable, space, text};
+use iced::widget::{column, markdown, row, space, text};
 use iced::{Center, Color, Element, Fill, Font, Length, Theme};
 
 use filament_core::{
@@ -28,9 +28,7 @@ pub fn view<'a>(
         Payload::Settings(settings) => settings_view(entry, settings, theme),
         Payload::Invalid(err) => invalid_view(entry, err, theme),
     };
-    scrollable(iced::widget::container(body).padding(24))
-        .height(Fill)
-        .into()
+    widgets::scroll(iced::widget::container(body).padding(th::PAD_PANE), theme).into()
 }
 
 // ---- shared pieces ----------------------------------------------------------
@@ -121,7 +119,7 @@ fn agent_view<'a>(
     preview: Option<&'a markdown::Content>,
     theme: &Theme,
 ) -> Element<'a, Message> {
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
     content = content.push(description(fm.description.clone(), theme));
 
@@ -193,7 +191,7 @@ fn skill_view<'a>(
     preview: Option<&'a markdown::Content>,
     theme: &Theme,
 ) -> Element<'a, Message> {
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
     content = content.push(description(fm.description.clone(), theme));
 
@@ -247,7 +245,7 @@ fn command_view<'a>(
     preview: Option<&'a markdown::Content>,
     theme: &Theme,
 ) -> Element<'a, Message> {
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
     if let Some(desc) = &fm.description {
         content = content.push(description(desc.clone(), theme));
@@ -279,7 +277,7 @@ fn command_view<'a>(
 
 fn mcp_view<'a>(entry: &'a Entry, server: &'a McpServer, theme: &Theme) -> Element<'a, Message> {
     let fg = theme.palette().text;
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
 
     let badges = vec![widgets::kv_pill(
@@ -326,7 +324,7 @@ fn settings_view<'a>(
     settings: &'a Settings,
     theme: &Theme,
 ) -> Element<'a, Message> {
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
 
     if let Some(agent) = &settings.agent {
@@ -422,7 +420,7 @@ fn hooks_view<'a>(groups: Vec<HookEventGroup>, theme: &Theme) -> Element<'a, Mes
 
 fn invalid_view<'a>(entry: &'a Entry, err: &'a ParseError, theme: &Theme) -> Element<'a, Message> {
     let danger = th::danger();
-    let mut content = column![].spacing(16).width(Fill);
+    let mut content = column![].spacing(th::GAP_SECTION).width(Fill);
     content = content.push(header(entry, theme));
     content = content.push(widgets::card(
         "Parse error",

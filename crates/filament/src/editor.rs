@@ -384,7 +384,7 @@ impl AgentEdit {
             &format!("Editing agent · {}", self.id_name()),
             theme
         )]
-        .spacing(16)
+        .spacing(th::GAP_SECTION)
         .width(Fill);
         content = content.push(form);
         if let Some(s) = &self.status {

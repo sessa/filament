@@ -1,6 +1,6 @@
 //! Small reusable building blocks: pills, swatches, glass cards, buttons.
 
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{border, Background, Border, Center, Color, Element, Length, Padding, Shadow, Theme};
 
 use filament_core::Scope;
@@ -59,7 +59,7 @@ pub fn kv_pill<'a>(key: &'a str, value: &'a str, theme: &Theme) -> Element<'a, M
     .into()
 }
 
-/// A small colored, slightly glowing dot.
+/// A small colored dot.
 pub fn swatch<'a>(color: Color, size: f32) -> Element<'a, Message> {
     container(text(""))
         .width(size)
@@ -67,14 +67,57 @@ pub fn swatch<'a>(color: Color, size: f32) -> Element<'a, Message> {
         .style(move |_| container::Style {
             background: Some(Background::Color(color)),
             border: border::rounded(size / 2.0),
-            shadow: Shadow {
-                color: th::with_alpha(color, 0.6),
-                offset: iced::Vector::new(0.0, 0.0),
-                blur_radius: 6.0,
-            },
             ..container::Style::default()
         })
         .into()
+}
+
+// ---- scrolling --------------------------------------------------------------
+
+/// A vertically-scrolling region with Filament's thin, translucent overlay
+/// scrollbar. The scroller floats in the content's right padding (no track, no
+/// reserved gutter), brightens on hover, and tints to the accent while dragged.
+pub fn scroll<'a>(
+    content: impl Into<Element<'a, Message>>,
+    theme: &Theme,
+) -> iced::widget::Scrollable<'a, Message> {
+    scrollable(content)
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new().width(6.0).scroller_width(6.0),
+        ))
+        .height(Length::Fill)
+        .style(scroll_style(theme))
+}
+
+fn scroll_style(theme: &Theme) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style {
+    let ink = theme.palette().text;
+    let accent = theme.palette().primary;
+    move |base_theme, status| {
+        let scroller = match status {
+            scrollable::Status::Dragged { .. } => th::with_alpha(accent, 0.75),
+            scrollable::Status::Hovered {
+                is_vertical_scrollbar_hovered: true,
+                ..
+            } => th::with_alpha(ink, 0.40),
+            scrollable::Status::Hovered { .. } => th::with_alpha(ink, 0.22),
+            scrollable::Status::Active { .. } => th::with_alpha(ink, 0.18),
+        };
+        let rail = scrollable::Rail {
+            background: None,
+            border: border::rounded(3),
+            scroller: scrollable::Scroller {
+                background: Background::Color(scroller),
+                border: border::rounded(3),
+            },
+        };
+        scrollable::Style {
+            container: container::Style::default(),
+            vertical_rail: rail,
+            horizontal_rail: rail,
+            gap: None,
+            ..scrollable::default(base_theme, status)
+        }
+    }
 }
 
 pub fn scope_pill<'a>(scope: Scope) -> Element<'a, Message> {
@@ -114,11 +157,12 @@ pub fn error_badge<'a>() -> Element<'a, Message> {
     .into()
 }
 
-/// A reusable glass-panel container style (raised surface + hairline + shadow).
+/// A reusable glass-panel container style (raised surface + hairline + a single
+/// soft shadow that lifts it off the blurred desktop).
 pub fn panel(theme: &Theme) -> impl Fn(&Theme) -> container::Style {
     let bg = th::surface_strong(theme);
     let bdr = th::hairline(theme);
-    let shadow = th::card_shadow();
+    let shadow = th::panel_shadow();
     move |_| container::Style {
         background: Some(Background::Color(bg)),
         border: Border {
@@ -131,12 +175,11 @@ pub fn panel(theme: &Theme) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
-/// A glass card with a title.
+/// A glass card with a title. Flat (no shadow): it sits inside a panel already.
 pub fn card<'a>(title: &'a str, body: Element<'a, Message>, theme: &Theme) -> Element<'a, Message> {
     let surface = th::surface(theme);
     let bdr = th::hairline(theme);
     let muted = th::muted(theme);
-    let shadow = th::card_shadow();
     container(
         column![
             text(title.to_uppercase())
@@ -146,7 +189,7 @@ pub fn card<'a>(title: &'a str, body: Element<'a, Message>, theme: &Theme) -> El
         ]
         .spacing(10),
     )
-    .padding(15)
+    .padding(th::PAD_CARD)
     .width(Length::Fill)
     .style(move |_| container::Style {
         background: Some(Background::Color(surface)),
@@ -155,19 +198,17 @@ pub fn card<'a>(title: &'a str, body: Element<'a, Message>, theme: &Theme) -> El
             width: 1.0,
             radius: th::RADIUS_CARD.into(),
         },
-        shadow,
         ..container::Style::default()
     })
     .into()
 }
 
-/// A glass card with no title, wrapping arbitrary content.
+/// A glass card with no title, wrapping arbitrary content. Flat, like [`card`].
 pub fn card_titleless<'a>(body: Element<'a, Message>, theme: &Theme) -> Element<'a, Message> {
     let surface = th::surface(theme);
     let bdr = th::hairline(theme);
-    let shadow = th::card_shadow();
     container(body)
-        .padding(16)
+        .padding(th::PAD_CARD)
         .width(Length::Fill)
         .style(move |_| container::Style {
             background: Some(Background::Color(surface)),
@@ -176,7 +217,6 @@ pub fn card_titleless<'a>(body: Element<'a, Message>, theme: &Theme) -> Element<
                 width: 1.0,
                 radius: th::RADIUS_CARD.into(),
             },
-            shadow,
             ..container::Style::default()
         })
         .into()

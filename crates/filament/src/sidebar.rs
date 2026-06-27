@@ -2,7 +2,7 @@
 //! item grouped by kind with icons, scope chips, color swatches, and
 //! error/shadow indicators.
 
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
+use iced::widget::{button, column, container, row, space, text, text_input};
 use iced::{border, Background, Center, Color, Element, Fill, Padding, Shadow, Theme};
 
 use filament_core::{Catalog, Entry, ItemId, ItemKind};
@@ -29,15 +29,15 @@ pub fn view<'a>(
             left: 10.0,
         });
 
-    let list = scrollable(
+    let list = widgets::scroll(
         container(build_list(catalog, selected, theme, query, kind_filter)).padding(Padding {
             top: 0.0,
             right: 8.0,
             bottom: 12.0,
             left: 8.0,
         }),
-    )
-    .height(Fill);
+        theme,
+    );
 
     column![top, list].height(Fill).into()
 }

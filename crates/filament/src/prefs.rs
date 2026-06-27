@@ -16,17 +16,33 @@ pub enum ThemeMode {
     #[default]
     Dark,
     Light,
+    /// The cool, navy "Ayu" palette (Mirage variant).
+    Ayu,
 }
 
 impl ThemeMode {
+    pub const ALL: [ThemeMode; 3] = [ThemeMode::Dark, ThemeMode::Light, ThemeMode::Ayu];
+
+    /// Whether this theme renders on a dark background (used for terminal tint
+    /// and accent contrast).
     pub fn is_dark(self) -> bool {
-        matches!(self, ThemeMode::Dark)
+        matches!(self, ThemeMode::Dark | ThemeMode::Ayu)
+    }
+
+    /// The next theme in the header's quick-cycle order.
+    pub fn next(self) -> ThemeMode {
+        match self {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Ayu,
+            ThemeMode::Ayu => ThemeMode::Dark,
+        }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             ThemeMode::Dark => "Dark",
             ThemeMode::Light => "Light",
+            ThemeMode::Ayu => "Ayu",
         }
     }
 }
