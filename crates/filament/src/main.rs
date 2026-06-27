@@ -36,13 +36,36 @@ fn main() -> iced::Result {
         .font(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/icons/phosphor.ttf").as_slice())
         .default_font(iced::Font::with_name("Inter"))
-        .window(iced::window::Settings {
-            size: iced::Size::new(1240.0, 820.0),
-            min_size: Some(iced::Size::new(880.0, 580.0)),
-            transparent: true,
-            blur: true,
-            ..Default::default()
-        })
+        .window(window_settings())
         .antialiasing(true)
         .run()
+}
+
+/// Window chrome for the glass UI.
+///
+/// The app paints its own rounded, translucent frame in `app::App::view`, so on
+/// macOS we dissolve the native title bar into it: the titlebar is made
+/// transparent, its text hidden, and the content drawn full-height behind it,
+/// leaving only the traffic-light buttons floating over the glass. Other
+/// platforms keep their native decorations.
+fn window_settings() -> iced::window::Settings {
+    let settings = iced::window::Settings {
+        size: iced::Size::new(1240.0, 820.0),
+        min_size: Some(iced::Size::new(880.0, 580.0)),
+        transparent: true,
+        blur: true,
+        ..Default::default()
+    };
+
+    #[cfg(target_os = "macos")]
+    let settings = iced::window::Settings {
+        platform_specific: iced::window::settings::PlatformSpecific {
+            title_hidden: true,
+            titlebar_transparent: true,
+            fullsize_content_view: true,
+        },
+        ..settings
+    };
+
+    settings
 }

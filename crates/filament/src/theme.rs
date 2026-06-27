@@ -34,6 +34,21 @@ pub const RADIUS_CARD: f32 = 12.0;
 pub const RADIUS_CONTROL: f32 = 9.0;
 pub const RADIUS_CHIP: f32 = 7.0;
 
+// ---- spacing scale ----------------------------------------------------------
+//
+// A small, shared set of spacing values so panes, cards, and gaps line up
+// across the app instead of drifting (24 here, 20 there). The window scale
+// factor (`Density`) zooms all of them together.
+
+/// Padding inside a scrollable content pane (inspector, editor, settings, …).
+pub const PAD_PANE: f32 = 20.0;
+/// Padding inside a card.
+pub const PAD_CARD: f32 = 16.0;
+/// Gap between top-level panels (sidebar / detail / header).
+pub const GAP_PANEL: f32 = 10.0;
+/// Gap between stacked cards or sections within a pane.
+pub const GAP_SECTION: f32 = 16.0;
+
 // ---- theme construction -----------------------------------------------------
 
 /// Resolve an accent to its sRGB color, nudged a touch deeper on light
@@ -52,10 +67,9 @@ pub fn accent_color(accent: AccentChoice, dark: bool) -> Color {
 /// palette's `primary`, so every widget that reads `palette().primary` picks it
 /// up automatically.
 pub fn build(mode: ThemeMode, accent: AccentChoice) -> Theme {
-    let dark = mode.is_dark();
-    let primary = accent_color(accent, dark);
-    let (name, palette) = if dark {
-        (
+    let primary = accent_color(accent, mode.is_dark());
+    let (name, palette) = match mode {
+        ThemeMode::Dark => (
             "Filament Dark",
             iced::theme::Palette {
                 background: Color::from_rgb8(0x21, 0x1F, 0x1D),
@@ -65,9 +79,8 @@ pub fn build(mode: ThemeMode, accent: AccentChoice) -> Theme {
                 warning: Color::from_rgb8(0xE0, 0xAF, 0x68),
                 danger: Color::from_rgb8(0xE5, 0x67, 0x5A),
             },
-        )
-    } else {
-        (
+        ),
+        ThemeMode::Light => (
             "Filament Light",
             iced::theme::Palette {
                 background: Color::from_rgb8(0xFA, 0xF9, 0xF5),
@@ -77,9 +90,48 @@ pub fn build(mode: ThemeMode, accent: AccentChoice) -> Theme {
                 warning: Color::from_rgb8(0xB5, 0x85, 0x2F),
                 danger: Color::from_rgb8(0xC0, 0x45, 0x3B),
             },
-        )
+        ),
+        // Ayu (Mirage): cool navy ground, warm gray ink, ayu's signature
+        // green / amber / coral for the semantic colors.
+        ThemeMode::Ayu => (
+            "Filament Ayu",
+            iced::theme::Palette {
+                background: AYU_BG,
+                text: Color::from_rgb8(0xCC, 0xCA, 0xC2),
+                primary,
+                success: Color::from_rgb8(0x87, 0xD9, 0x6C),
+                warning: Color::from_rgb8(0xFF, 0xD1, 0x73),
+                danger: Color::from_rgb8(0xF2, 0x87, 0x79),
+            },
+        ),
     };
     Theme::custom(name.to_string(), palette)
+}
+
+/// Ayu Mirage's base background. Also used to recognize the active tone (see
+/// [`tone`]) so the translucent surfaces can pick a matching cool tint.
+const AYU_BG: Color = Color::from_rgb8(0x1F, 0x24, 0x30);
+
+/// A cool periwinkle used to tint Ayu's translucent surfaces and hairlines.
+const AYU_OVERLAY: Color = Color::from_rgb8(0x9F, 0xB0, 0xD6);
+
+/// Which surface family to paint. Detected from the live [`Theme`] so the
+/// surface helpers stay parameter-compatible with their many call sites.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tone {
+    Light,
+    Dark,
+    Ayu,
+}
+
+fn tone(theme: &Theme) -> Tone {
+    if theme.palette().background == AYU_BG {
+        Tone::Ayu
+    } else if theme.extended_palette().is_dark {
+        Tone::Dark
+    } else {
+        Tone::Light
+    }
 }
 
 // ---- semantic colors --------------------------------------------------------
@@ -126,19 +178,15 @@ fn darken(c: Color, amount: f32) -> Color {
     }
 }
 
-fn is_dark(theme: &Theme) -> bool {
-    theme.extended_palette().is_dark
-}
-
 // ---- surfaces ---------------------------------------------------------------
 
 /// Translucent app background (painted by the application style). Low alpha lets
 /// OS blur show through; the warm tint keeps it cohesive with Claude Code.
 pub fn app_background(theme: &Theme) -> Color {
-    if is_dark(theme) {
-        Color::from_rgba(0.102, 0.098, 0.090, 0.86)
-    } else {
-        Color::from_rgba(0.969, 0.961, 0.945, 0.88)
+    match tone(theme) {
+        Tone::Dark => Color::from_rgba(0.102, 0.098, 0.090, 0.86),
+        Tone::Light => Color::from_rgba(0.969, 0.961, 0.945, 0.88),
+        Tone::Ayu => Color::from_rgba(0.094, 0.110, 0.149, 0.88),
     }
 }
 
@@ -154,47 +202,53 @@ pub fn faint(theme: &Theme) -> Color {
 
 /// A faint translucent fill for cards.
 pub fn surface(theme: &Theme) -> Color {
-    if is_dark(theme) {
-        Color::from_rgba(1.0, 0.98, 0.95, 0.045)
-    } else {
-        Color::from_rgba(0.30, 0.26, 0.18, 0.035)
+    match tone(theme) {
+        Tone::Dark => Color::from_rgba(1.0, 0.98, 0.95, 0.045),
+        Tone::Light => Color::from_rgba(0.30, 0.26, 0.18, 0.035),
+        Tone::Ayu => with_alpha(AYU_OVERLAY, 0.05),
     }
 }
 
 /// A slightly stronger fill for raised chrome (header, panels, inputs).
 pub fn surface_strong(theme: &Theme) -> Color {
-    if is_dark(theme) {
-        Color::from_rgba(1.0, 0.98, 0.95, 0.075)
-    } else {
-        Color::from_rgba(0.30, 0.26, 0.18, 0.055)
+    match tone(theme) {
+        Tone::Dark => Color::from_rgba(1.0, 0.98, 0.95, 0.075),
+        Tone::Light => Color::from_rgba(0.30, 0.26, 0.18, 0.055),
+        Tone::Ayu => with_alpha(AYU_OVERLAY, 0.09),
     }
 }
 
 /// A hairline border color.
 pub fn hairline(theme: &Theme) -> Color {
-    if is_dark(theme) {
-        with_alpha(theme.palette().text, 0.12)
-    } else {
-        with_alpha(theme.palette().text, 0.10)
+    match tone(theme) {
+        Tone::Dark => with_alpha(theme.palette().text, 0.12),
+        Tone::Light => with_alpha(theme.palette().text, 0.10),
+        Tone::Ayu => with_alpha(AYU_OVERLAY, 0.16),
     }
 }
 
 // ---- shadows ----------------------------------------------------------------
+//
+// Used sparingly: a single soft shadow lifts the top-level glass panels off the
+// blurred desktop, and a barely-there one gives the primary button a hint of
+// depth. Inner cards and chips stay flat — they already sit inside a panel, so
+// stacking shadows there just muddies the glass.
 
-/// Soft drop shadow for cards.
-pub fn card_shadow() -> Shadow {
+/// Soft drop shadow for the main glass panels (sidebar, detail, header,
+/// terminal).
+pub fn panel_shadow() -> Shadow {
     Shadow {
-        color: Color::from_rgba(0.0, 0.0, 0.0, 0.24),
-        offset: Vector::new(0.0, 6.0),
-        blur_radius: 22.0,
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
+        offset: Vector::new(0.0, 4.0),
+        blur_radius: 16.0,
     }
 }
 
-/// Subtle shadow for small raised elements.
+/// A barely-there lift for the primary action button.
 pub fn soft_shadow() -> Shadow {
     Shadow {
-        color: Color::from_rgba(0.0, 0.0, 0.0, 0.16),
-        offset: Vector::new(0.0, 2.0),
-        blur_radius: 8.0,
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+        offset: Vector::new(0.0, 1.0),
+        blur_radius: 4.0,
     }
 }

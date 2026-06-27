@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use iced::widget::{
-    button, column, container, markdown, row, rule, scrollable, space, text, text_editor,
-};
+use iced::widget::{button, column, container, markdown, row, rule, space, text, text_editor};
 use iced::{
     border, Background, Border, Center, Color, Element, Fill, Length, Padding, Shadow,
     Subscription, Task, Theme,
@@ -325,11 +323,7 @@ impl App {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => {
-                self.prefs.theme = if self.prefs.theme.is_dark() {
-                    crate::prefs::ThemeMode::Light
-                } else {
-                    crate::prefs::ThemeMode::Dark
-                };
+                self.prefs.theme = self.prefs.theme.next();
                 self.prefs.save();
             }
             Message::Rescan | Message::FsChanged => self.rescan(),
@@ -812,13 +806,16 @@ impl App {
         let detail: Element<Message> = match self.section {
             Section::Config => match &self.mode {
                 Mode::Inspect => self.detail(),
-                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(20))
+                Mode::EditAgent(st) => {
+                    widgets::scroll(container(st.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
+                Mode::EditSource(st) => container(st.view(&theme))
+                    .padding(th::PAD_PANE)
                     .height(Fill)
                     .into(),
-                Mode::EditSource(st) => container(st.view(&theme)).padding(20).height(Fill).into(),
-                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(20))
-                    .height(Fill)
-                    .into(),
+                Mode::Wizard(w) => {
+                    widgets::scroll(container(w.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
             },
             Section::Sessions => self.sessions.detail(&theme),
             Section::Settings => {
@@ -850,7 +847,7 @@ impl App {
                 detail_panel,
                 container(panel).height(Length::FillPortion(2)),
             ]
-            .spacing(10)
+            .spacing(th::GAP_PANEL)
             .into(),
             None => detail_panel.into(),
         };
@@ -875,11 +872,13 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
+        let body = row![sidebar_panel, right_pane]
+            .spacing(th::GAP_PANEL)
+            .height(Fill);
 
         let content = column![self.header(&theme), body]
-            .spacing(10)
-            .padding(10)
+            .spacing(th::GAP_PANEL)
+            .padding(th::GAP_PANEL)
             .height(Fill);
 
         // Rounded glass frame: the visible "window", with soft corners over the
@@ -910,7 +909,7 @@ impl App {
         let accent = theme.palette().primary;
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
-        let shadow = th::card_shadow();
+        let shadow = th::panel_shadow();
         let label = if self.terminal_label.is_empty() {
             "Terminal".to_string()
         } else {
@@ -969,7 +968,7 @@ impl App {
         let danger = theme.palette().danger;
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
-        let shadow = th::card_shadow();
+        let shadow = th::panel_shadow();
 
         let bar = container(
             row![
@@ -1099,15 +1098,13 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
-        let theme_toggle = widgets::icon_only(
-            if self.prefs.theme.is_dark() {
-                icon::SUN
-            } else {
-                icon::MOON
-            },
-            Message::ToggleTheme,
-            theme,
-        );
+        // Cycles Dark → Light → Ayu; the glyph shows the active theme.
+        let theme_glyph = match self.prefs.theme {
+            crate::prefs::ThemeMode::Dark => icon::MOON,
+            crate::prefs::ThemeMode::Light => icon::SUN,
+            crate::prefs::ThemeMode::Ayu => icon::PALETTE,
+        };
+        let theme_toggle = widgets::icon_only(theme_glyph, Message::ToggleTheme, theme);
         let terminal_button = widgets::icon_button(
             icon::TERMINAL,
             if self.terminal_open {
@@ -1220,7 +1217,7 @@ impl App {
                 top: 9.0,
                 right: 12.0,
                 bottom: 9.0,
-                left: 14.0,
+                left: header_left_inset(self.prefs.density.scale()),
             })
             .style(widgets::panel(theme))
             .into()
@@ -1280,6 +1277,30 @@ fn usable_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .filter(|p| p.is_dir())
+}
+
+/// Left padding for the header bar.
+///
+/// On macOS the title bar is transparent and the content runs full-height behind
+/// it (see `window_settings` in `main`), so the native traffic-light buttons
+/// float over the top-left of the header. They sit a fixed distance from the
+/// window edge regardless of our UI scale, so reserve that space — converted
+/// from physical points into pre-scale logical points and offset by the frame
+/// padding already ahead of the header — so the title never sits under them.
+/// On every other platform the default padding applies.
+#[cfg(target_os = "macos")]
+fn header_left_inset(scale: f32) -> f32 {
+    /// Right edge of the traffic-light cluster, plus a small gap (window points).
+    const TRAFFIC_LIGHTS_PT: f32 = 80.0;
+    /// Outer content padding (`view`'s column) ahead of the header panel.
+    const FRAME_INSET: f32 = 10.0;
+    (TRAFFIC_LIGHTS_PT / scale - FRAME_INSET).max(14.0)
+}
+
+/// Left padding for the header bar (non-macOS: the default, no traffic lights).
+#[cfg(not(target_os = "macos"))]
+fn header_left_inset(_scale: f32) -> f32 {
+    14.0
 }
 
 /// A short label for the terminal header: `program · dirname`.
