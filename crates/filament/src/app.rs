@@ -383,6 +383,7 @@ impl App {
         match iced_term::Terminal::new(id, settings) {
             Ok(term) => {
                 let widget_id = term.widget_id().clone();
+                log::info!("terminal #{id} opened: kind={kind} label={label:?}");
                 self.terminals.push(TermTab {
                     id,
                     term,
@@ -397,6 +398,7 @@ impl App {
                 iced_term::TerminalView::focus(widget_id)
             }
             Err(e) => {
+                log::error!("terminal #{id} failed to start ({kind}): {e}");
                 self.terminal_open = true;
                 self.terminal_error = Some(format!("Couldn't start the terminal: {e}"));
                 Task::none()
@@ -546,6 +548,10 @@ impl App {
                 if let Some(tab) = self.terminals.iter_mut().find(|t| t.id == id) {
                     let action = tab.term.handle(iced_term::Command::ProxyToBackend(cmd));
                     if matches!(action, iced_term::actions::Action::Shutdown) {
+                        log::info!(
+                            "terminal #{id} ({}) process exited — closing tab",
+                            tab.label
+                        );
                         self.close_tab(id);
                     }
                 }

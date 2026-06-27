@@ -947,6 +947,7 @@ dependencies = [
  "filament-core",
  "iced",
  "iced_term",
+ "log",
  "notify",
  "notify-debouncer-full",
  "rfd",
