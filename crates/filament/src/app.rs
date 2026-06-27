@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use iced::widget::{
-    button, column, container, markdown, row, rule, scrollable, space, text, text_editor,
-};
+use iced::widget::{button, column, container, markdown, row, rule, space, text, text_editor};
 use iced::{
     border, Background, Border, Center, Color, Element, Fill, Length, Padding, Shadow,
     Subscription, Task, Theme,
@@ -304,11 +302,7 @@ impl App {
                 self.kind_filter = if self.kind_filter == kind { None } else { kind };
             }
             Message::ToggleTheme => {
-                self.prefs.theme = if self.prefs.theme.is_dark() {
-                    crate::prefs::ThemeMode::Light
-                } else {
-                    crate::prefs::ThemeMode::Dark
-                };
+                self.prefs.theme = self.prefs.theme.next();
                 self.prefs.save();
             }
             Message::Rescan | Message::FsChanged => self.rescan(),
@@ -768,13 +762,16 @@ impl App {
         let detail: Element<Message> = match self.section {
             Section::Config => match &self.mode {
                 Mode::Inspect => self.detail(),
-                Mode::EditAgent(st) => scrollable(container(st.view(&theme)).padding(20))
+                Mode::EditAgent(st) => {
+                    widgets::scroll(container(st.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
+                Mode::EditSource(st) => container(st.view(&theme))
+                    .padding(th::PAD_PANE)
                     .height(Fill)
                     .into(),
-                Mode::EditSource(st) => container(st.view(&theme)).padding(20).height(Fill).into(),
-                Mode::Wizard(w) => scrollable(container(w.view(&theme)).padding(20))
-                    .height(Fill)
-                    .into(),
+                Mode::Wizard(w) => {
+                    widgets::scroll(container(w.view(&theme)).padding(th::PAD_PANE), &theme).into()
+                }
             },
             Section::Sessions => self.sessions.detail(&theme),
             Section::Settings => {
@@ -795,7 +792,7 @@ impl App {
                     detail_panel,
                     container(self.terminal_panel(term, &theme)).height(Length::FillPortion(2)),
                 ]
-                .spacing(10)
+                .spacing(th::GAP_PANEL)
                 .into()
             } else {
                 detail_panel.into()
@@ -824,11 +821,13 @@ impl App {
             .clip(true)
             .style(widgets::panel(&theme));
 
-        let body = row![sidebar_panel, right_pane].spacing(10).height(Fill);
+        let body = row![sidebar_panel, right_pane]
+            .spacing(th::GAP_PANEL)
+            .height(Fill);
 
         let content = column![self.header(&theme), body]
-            .spacing(10)
-            .padding(10)
+            .spacing(th::GAP_PANEL)
+            .padding(th::GAP_PANEL)
             .height(Fill);
 
         // Rounded glass frame: the visible "window", with soft corners over the
@@ -859,7 +858,7 @@ impl App {
         let accent = theme.palette().primary;
         let bg = th::surface_strong(theme);
         let bdr = th::hairline(theme);
-        let shadow = th::card_shadow();
+        let shadow = th::panel_shadow();
         let label = if self.terminal_label.is_empty() {
             "Terminal".to_string()
         } else {
@@ -990,15 +989,13 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
 
-        let theme_toggle = widgets::icon_only(
-            if self.prefs.theme.is_dark() {
-                icon::SUN
-            } else {
-                icon::MOON
-            },
-            Message::ToggleTheme,
-            theme,
-        );
+        // Cycles Dark → Light → Ayu; the glyph shows the active theme.
+        let theme_glyph = match self.prefs.theme {
+            crate::prefs::ThemeMode::Dark => icon::MOON,
+            crate::prefs::ThemeMode::Light => icon::SUN,
+            crate::prefs::ThemeMode::Ayu => icon::PALETTE,
+        };
+        let theme_toggle = widgets::icon_only(theme_glyph, Message::ToggleTheme, theme);
         let terminal_button = widgets::icon_button(
             icon::TERMINAL,
             if self.terminal_open {
