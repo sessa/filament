@@ -876,20 +876,32 @@ impl App {
             .spacing(th::GAP_PANEL)
             .height(Fill);
 
-        // On macOS the header is flush with the top (it doubles as the title
-        // bar), so the body sits below a hairline divider and is inset on its
-        // own. Elsewhere the native title bar is above us, so the header is a
-        // normal inset panel with even padding around everything.
+        // On macOS the native title bar is transparent and our content runs
+        // full-height behind it, with the traffic-light buttons floating at the
+        // top-left. macOS pins those to the title-bar region, so we reserve a
+        // strip of that height at the very top (the buttons live there, over the
+        // glass) and drop the toolbar + body just beneath it. The toolbar is the
+        // same rounded panel as everywhere else — no fighting the buttons for a
+        // shared row. Elsewhere the native title bar is above us, so we go
+        // straight to the toolbar.
         let content = if cfg!(target_os = "macos") {
-            column![
-                self.header(&theme),
-                rule::horizontal(1),
-                container(body)
+            let titlebar =
+                container(space())
                     .width(Fill)
-                    .height(Fill)
-                    .padding(th::GAP_PANEL),
+                    .height(Length::Fixed(macos_titlebar_height(
+                        self.prefs.density.scale(),
+                    )));
+            column![
+                titlebar,
+                column![self.header(&theme), body]
+                    .spacing(th::GAP_PANEL)
+                    .padding(Padding {
+                        top: 0.0,
+                        right: th::GAP_PANEL,
+                        bottom: th::GAP_PANEL,
+                        left: th::GAP_PANEL,
+                    }),
             ]
-            .width(Fill)
             .height(Fill)
         } else {
             column![self.header(&theme), body]
@@ -1229,46 +1241,15 @@ impl App {
         .align_y(Center)
         .spacing(4);
 
-        if cfg!(target_os = "macos") {
-            // The header *is* the title bar: flush with the top, full width, with
-            // the content cleared past the traffic lights and centered to sit
-            // beside them. Rounded only at the top so it follows the window's
-            // corners; a divider under it (added in `view`) separates the body.
-            let surface = th::surface_strong(theme);
-            container(bar)
-                .width(Fill)
-                .padding(Padding {
-                    top: 2.0,
-                    right: 12.0,
-                    bottom: 8.0,
-                    left: header_left_inset(self.prefs.density.scale()),
-                })
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(surface)),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: border::Radius {
-                            top_left: 16.0,
-                            top_right: 16.0,
-                            bottom_right: 0.0,
-                            bottom_left: 0.0,
-                        },
-                    },
-                    ..container::Style::default()
-                })
-                .into()
-        } else {
-            container(bar)
-                .padding(Padding {
-                    top: 9.0,
-                    right: 12.0,
-                    bottom: 9.0,
-                    left: 14.0,
-                })
-                .style(widgets::panel(theme))
-                .into()
-        }
+        container(bar)
+            .padding(Padding {
+                top: 9.0,
+                right: 12.0,
+                bottom: 9.0,
+                left: 14.0,
+            })
+            .style(widgets::panel(theme))
+            .into()
     }
 
     fn detail(&self) -> Element<'_, Message> {
@@ -1327,25 +1308,18 @@ fn usable_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-/// Left padding for the header bar so the title clears the traffic lights.
+/// Height to reserve at the very top of the window for the macOS title-bar
+/// region, where the traffic-light buttons float over the glass.
 ///
-/// On macOS the title bar is dissolved into the glass and the header doubles as
-/// it (see `window_settings` in `main` and `App::header`), sitting flush with
-/// the window's left edge. The native traffic-light cluster lives there, a fixed
-/// distance from that edge regardless of our UI scale, so reserve that width —
-/// converted from physical window points into pre-scale logical points — plus a
-/// gap before the title. On every other platform the default padding applies.
-#[cfg(target_os = "macos")]
-fn header_left_inset(scale: f32) -> f32 {
-    /// Right edge of the traffic-light cluster plus a gap, in window points.
-    const CLEAR_PT: f32 = 92.0;
-    CLEAR_PT / scale
-}
-
-/// Left padding for the header bar (non-macOS: the default, no traffic lights).
-#[cfg(not(target_os = "macos"))]
-fn header_left_inset(_scale: f32) -> f32 {
-    14.0
+/// With a transparent title bar + full-size content view (see `window_settings`
+/// in `main`), our content runs to the top and the buttons sit in the standard
+/// title-bar band. We keep that band clear so the toolbar drops cleanly beneath
+/// it. The band is fixed in physical window points regardless of our UI scale,
+/// so convert it into pre-scale logical points.
+fn macos_titlebar_height(scale: f32) -> f32 {
+    /// Standard macOS title-bar height in window points, plus a little room.
+    const TITLEBAR_PT: f32 = 30.0;
+    TITLEBAR_PT / scale
 }
 
 /// A short label for the terminal header: `program · dirname`.
