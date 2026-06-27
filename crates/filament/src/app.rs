@@ -1564,11 +1564,25 @@ impl App {
             })
             .width(Fill);
 
+        // The embedded `iced_term` canvas needs a fully opaque backing: the app
+        // window is transparent (glass), and the panel's own `surface_strong`
+        // fill is ~7% alpha, so without this the terminal composites against the
+        // blurred desktop and reads as blank. Match the exact color `iced_term`'s
+        // palette uses for the terminal background (see `terminal::palette`).
+        let term_bg = if self.prefs.theme.is_dark() {
+            Color::from_rgb8(0x1B, 0x1A, 0x18)
+        } else {
+            Color::from_rgb8(0xFB, 0xFA, 0xF6)
+        };
         let inner: Element<Message> = match self.active_tab.and_then(|i| self.terminals.get(i)) {
             Some(tab) => container(iced_term::TerminalView::show(&tab.term).map(Message::Terminal))
                 .padding(8)
                 .width(Fill)
                 .height(Fill)
+                .style(move |_| container::Style {
+                    background: Some(Background::Color(term_bg)),
+                    ..container::Style::default()
+                })
                 .into(),
             None => container(
                 text("No terminal")
