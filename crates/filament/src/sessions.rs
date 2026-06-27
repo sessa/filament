@@ -54,6 +54,8 @@ pub enum SessionMsg {
     RepoInputChanged(String),
     /// Open the repository named in the path input.
     OpenRepo,
+    /// Pick a repository folder with the native file dialog.
+    BrowseRepo,
     /// Switch the active repository to a known path.
     SetRepo(PathBuf),
 }
@@ -378,6 +380,8 @@ impl SessionsState {
             .into()
         });
 
+        // Browsing opens the OS folder picker; the text field stays for typing or
+        // pasting an exact path (Enter opens it).
         let open_row = row![
             text_input("/path/to/repo", &self.repo_input)
                 .on_input(|s| Message::Sessions(SessionMsg::RepoInputChanged(s)))
@@ -387,8 +391,8 @@ impl SessionsState {
                 .width(Fill),
             widgets::icon_button(
                 icon::FOLDER_OPEN,
-                "Open",
-                Message::Sessions(SessionMsg::OpenRepo),
+                "Browse…",
+                Message::Sessions(SessionMsg::BrowseRepo),
                 theme,
             ),
         ]
