@@ -49,7 +49,7 @@ impl Mode {
 /// One integrated terminal tab.
 pub struct TermTab {
     pub id: u64,
-    pub term: iced_term::Terminal,
+    pub term: filament_terminal::Terminal,
     /// A short label describing what's running / where.
     pub label: String,
     /// "claude" / "shell" / "manager" / "command".
@@ -107,7 +107,7 @@ pub enum Message {
     Cfg(CfgMsg),
 
     // terminal
-    Terminal(iced_term::Event),
+    Terminal(filament_terminal::Event),
     ToggleTerminal,
     RunSelectedAgent,
     OpenManager,
@@ -271,12 +271,10 @@ impl App {
 
     /// Global UI zoom, driven by the density preference.
     pub fn scale_factor(&self) -> f32 {
-        // DIAGNOSTIC (blank-terminal): iced_term positions its canvas geometry at
-        // absolute layout coords; a non-1.0 global scale is a suspect for the
-        // terminal's geometry layer not appearing. Pin to 1.0 temporarily to
-        // rule the scale factor in or out. Restore `self.prefs.density.scale()`.
-        let _ = self.prefs.density.scale();
-        1.0
+        // The terminal renders at absolute layout coords through the native
+        // text/quad path, which iced scales like any other widget, so the global
+        // density zoom applies cleanly.
+        self.prefs.density.scale()
     }
 
     /// The root window background is fully transparent; the rounded frame in
@@ -377,7 +375,7 @@ impl App {
     /// why, instead of silently showing nothing.
     fn open_terminal(
         &mut self,
-        settings: iced_term::settings::Settings,
+        settings: filament_terminal::settings::Settings,
         label: String,
         kind: &str,
         session_id: Option<String>,
@@ -385,7 +383,7 @@ impl App {
     ) -> Task<Message> {
         let id = self.next_term_id;
         self.next_term_id += 1;
-        match iced_term::Terminal::new(id, settings) {
+        match filament_terminal::Terminal::new(id, settings) {
             Ok(term) => {
                 let widget_id = term.widget_id().clone();
                 log::info!("terminal #{id} opened: kind={kind} label={label:?}");
@@ -400,7 +398,7 @@ impl App {
                 self.active_tab = Some(self.terminals.len() - 1);
                 self.terminal_open = true;
                 self.terminal_error = None;
-                iced_term::TerminalView::focus(widget_id)
+                filament_terminal::TerminalView::focus(widget_id)
             }
             Err(e) => {
                 log::error!("terminal #{id} failed to start ({kind}): {e}");
@@ -447,8 +445,8 @@ impl App {
             })
             .or(self.active_tab);
         if let Some(tab) = idx.and_then(|i| self.terminals.get_mut(i)) {
-            let _ = tab.term.handle(iced_term::Command::ProxyToBackend(
-                iced_term::BackendCommand::Write(bytes),
+            let _ = tab.term.handle(filament_terminal::Command::ProxyToBackend(
+                filament_terminal::BackendCommand::Write(bytes),
             ));
         }
     }
@@ -549,10 +547,12 @@ impl App {
                 }
             }
             Message::CloseTab(id) => self.close_tab(id),
-            Message::Terminal(iced_term::Event::BackendCall(id, cmd)) => {
+            Message::Terminal(filament_terminal::Event::BackendCall(id, cmd)) => {
                 if let Some(tab) = self.terminals.iter_mut().find(|t| t.id == id) {
-                    let action = tab.term.handle(iced_term::Command::ProxyToBackend(cmd));
-                    if matches!(action, iced_term::actions::Action::Shutdown) {
+                    let action = tab
+                        .term
+                        .handle(filament_terminal::Command::ProxyToBackend(cmd));
+                    if matches!(action, filament_terminal::actions::Action::Shutdown) {
                         log::info!(
                             "terminal #{id} ({}) process exited — closing tab",
                             tab.label
@@ -735,8 +735,8 @@ impl App {
                     let mut bytes = text.into_bytes();
                     bytes.push(b'\n');
                     if let Some(tab) = self.terminals.get_mut(i) {
-                        let _ = tab.term.handle(iced_term::Command::ProxyToBackend(
-                            iced_term::BackendCommand::Write(bytes),
+                        let _ = tab.term.handle(filament_terminal::Command::ProxyToBackend(
+                            filament_terminal::BackendCommand::Write(bytes),
                         ));
                     }
                 } else {
@@ -1569,26 +1569,16 @@ impl App {
             })
             .width(Fill);
 
-        // The embedded `iced_term` canvas needs a fully opaque backing: the app
-        // window is transparent (glass), and the panel's own `surface_strong`
-        // fill is ~7% alpha, so without this the terminal composites against the
-        // blurred desktop and reads as blank. Match the exact color `iced_term`'s
-        // palette uses for the terminal background (see `terminal::palette`).
-        let term_bg = if self.prefs.theme.is_dark() {
-            Color::from_rgb8(0x1B, 0x1A, 0x18)
-        } else {
-            Color::from_rgb8(0xFB, 0xFA, 0xF6)
-        };
+        // The terminal paints its own opaque backing (a background quad under the
+        // grid), so it fills the panel edge-to-edge with no separate opaque shim;
+        // the surrounding window stays translucent glass.
         let inner: Element<Message> = match self.active_tab.and_then(|i| self.terminals.get(i)) {
-            Some(tab) => container(iced_term::TerminalView::show(&tab.term).map(Message::Terminal))
-                .padding(8)
-                .width(Fill)
-                .height(Fill)
-                .style(move |_| container::Style {
-                    background: Some(Background::Color(term_bg)),
-                    ..container::Style::default()
-                })
-                .into(),
+            Some(tab) => {
+                container(filament_terminal::TerminalView::show(&tab.term).map(Message::Terminal))
+                    .width(Fill)
+                    .height(Fill)
+                    .into()
+            }
             None => container(
                 text("No terminal")
                     .size(th::TEXT_META)

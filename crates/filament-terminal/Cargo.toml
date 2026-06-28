@@ -1,0 +1,27 @@
+# filament-terminal — Filament's owned, embedded terminal widget.
+#
+# Originally a vendored fork of `iced_term` 0.8 (MIT, Ilya Shvyryalkin). It is now
+# a first-class crate in this workspace: an `alacritty_terminal` + `portable-pty`
+# backend plus a native iced widget that renders the grid through iced's normal
+# text/quad path (no canvas geometry layer), so it composites with the glass UI
+# and respects the global scale factor.
+[package]
+name = "filament-terminal"
+edition = "2021"
+version = "0.2.5"
+license = "MIT"
+description = "Embedded terminal widget for Filament, powered by iced + alacritty_terminal."
+
+[lib]
+name = "filament_terminal"
+path = "src/lib.rs"
+
+[dependencies]
+alacritty_terminal = "0.25.1"
+anyhow = "1"
+iced = { version = "0.14", features = ["advanced"] }
+iced_core = "0.14"
+iced_graphics = { version = "0.14", default-features = false }
+log = { version = "0.4", features = ["std"] }
+open = "5"
+tokio = { version = "1", features = ["full"] }

@@ -102,10 +102,7 @@ impl BindingsLayout {
         layout
     }
 
-    pub(crate) fn add_bindings(
-        &mut self,
-        bindings: Vec<(Binding<InputKind>, BindingAction)>,
-    ) {
+    pub(crate) fn add_bindings(&mut self, bindings: Vec<(Binding<InputKind>, BindingAction)>) {
         for (binding, action) in bindings {
             match self
                 .layout
@@ -375,10 +372,9 @@ mod tests {
             current_layout.layout.len(),
             current_layout_length + custom_bindings_length
         );
-        let found_binding =
-            current_layout.layout.iter().find(|(bind, action)| {
-                bind == &custom_bindings[0].0 && action == &custom_bindings[0].1
-            });
+        let found_binding = current_layout.layout.iter().find(|(bind, action)| {
+            bind == &custom_bindings[0].0 && action == &custom_bindings[0].1
+        });
         assert!(found_binding.is_some());
     }
 
@@ -401,10 +397,10 @@ mod tests {
             current_layout_length + custom_bindings_length
         );
         for (custom_bind, custom_action) in custom_bindings {
-            let found_binding =
-                current_layout.layout.iter().find(|(bind, action)| {
-                    bind == &custom_bind && action == &custom_action
-                });
+            let found_binding = current_layout
+                .layout
+                .iter()
+                .find(|(bind, action)| bind == &custom_bind && action == &custom_action);
             assert!(found_binding.is_some());
         }
     }
@@ -423,10 +419,10 @@ mod tests {
         current_layout.add_bindings(custom_bindings.clone());
         assert_eq!(current_layout.layout.len(), current_layout_length + 1);
         for (custom_bind, custom_action) in custom_bindings {
-            let found_binding =
-                current_layout.layout.iter().find(|(bind, action)| {
-                    bind == &custom_bind && action == &custom_action
-                });
+            let found_binding = current_layout
+                .layout
+                .iter()
+                .find(|(bind, action)| bind == &custom_bind && action == &custom_action);
             assert!(found_binding.is_some());
         }
         let replaced_bindings = generate_bindings!(
@@ -436,10 +432,10 @@ mod tests {
             "c", Modifiers::SHIFT | Modifiers::CTRL; BindingAction::Char('\x03');
         );
         for (custom_bind, custom_action) in replaced_bindings {
-            let found_binding =
-                current_layout.layout.iter().find(|(bind, action)| {
-                    bind == &custom_bind && action == &custom_action
-                });
+            let found_binding = current_layout
+                .layout
+                .iter()
+                .find(|(bind, action)| bind == &custom_bind && action == &custom_action);
             assert!(found_binding.is_none());
         }
     }
@@ -456,10 +452,10 @@ mod tests {
         current_layout.add_bindings(custom_bindings.clone());
         assert_eq!(current_layout.layout.len(), current_layout_length + 2);
         for (custom_bind, custom_action) in custom_bindings {
-            let found_binding =
-                current_layout.layout.iter().find(|(bind, action)| {
-                    bind == &custom_bind && action == &custom_action
-                });
+            let found_binding = current_layout
+                .layout
+                .iter()
+                .find(|(bind, action)| bind == &custom_bind && action == &custom_action);
             assert!(found_binding.is_some());
         }
     }

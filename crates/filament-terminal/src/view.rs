@@ -1,6 +1,4 @@
-use crate::backend::{
-    Backend, Command, LinkAction, MouseButton, RenderableContent,
-};
+use crate::backend::{Backend, Command, LinkAction, MouseButton, RenderableContent};
 use crate::bindings::{BindingAction, BindingsLayout, InputKind};
 use crate::terminal::{Event, Terminal};
 use crate::theme::TerminalStyle;
@@ -11,17 +9,19 @@ use alacritty_terminal::vte::ansi::{self as ansi, NamedColor};
 use iced::alignment::Vertical;
 use iced::font::{Style as FontStyle, Weight as FontWeight};
 use iced::mouse::{Cursor, ScrollDelta};
-use iced::widget::canvas::{Path, Text};
 use iced::widget::container;
-use iced::{Color, Element, Length, Point, Rectangle, Size, Theme};
+use iced::{Border, Color, Element, Length, Point, Rectangle, Size, Theme};
 use iced_core::clipboard::Kind as ClipboardKind;
 use iced_core::keyboard::{Key, Modifiers};
 use iced_core::mouse::{self, Click};
-use iced_core::text::{Alignment, LineHeight, Shaping};
+use iced_core::renderer::Quad;
+use iced_core::text::{
+    Alignment as TextAlignment, LineHeight, Renderer as _, Shaping, Text as CoreText, Wrapping,
+};
 use iced_core::widget::operation::{self, Focusable};
+use iced_core::Renderer as _;
 use iced_graphics::core::widget::{tree, Tree};
 use iced_graphics::core::Widget;
-use iced_graphics::geometry::Stroke;
 
 pub struct TerminalView<'a> {
     term: &'a Terminal,
@@ -36,17 +36,11 @@ impl<'a> TerminalView<'a> {
             .into()
     }
 
-    pub fn focus<Message: 'static>(
-        id: iced::widget::Id,
-    ) -> iced::Task<Message> {
+    pub fn focus<Message: 'static>(id: iced::widget::Id) -> iced::Task<Message> {
         iced::widget::operation::focus(id)
     }
 
-    fn is_cursor_in_layout(
-        &self,
-        cursor: Cursor,
-        layout: iced_graphics::core::Layout<'_>,
-    ) -> bool {
+    fn is_cursor_in_layout(&self, cursor: Cursor, layout: iced_graphics::core::Layout<'_>) -> bool {
         if let Some(cursor_position) = cursor.position() {
             let layout_position = layout.position();
             let layout_size = layout.bounds();
@@ -79,10 +73,7 @@ impl<'a> TerminalView<'a> {
         let layout_size = layout.bounds().size();
         if state.size != layout_size {
             state.size = layout_size;
-            let cmd = Command::Resize(
-                Some(layout_size),
-                Some(self.term.font.measure),
-            );
+            let cmd = Command::Resize(Some(layout_size), Some(self.term.font.measure));
             shell.publish(Event::BackendCall(self.term.id, cmd));
         }
     }
@@ -113,9 +104,7 @@ impl<'a> TerminalView<'a> {
         let terminal_mode = terminal_content.terminal_mode;
 
         match event {
-            iced_core::mouse::Event::ButtonPressed(
-                iced_core::mouse::Button::Left,
-            ) => {
+            iced_core::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) => {
                 if !state.is_focused() {
                     return Vec::default();
                 }
@@ -127,7 +116,7 @@ impl<'a> TerminalView<'a> {
                     layout_position,
                     &mut commands,
                 );
-            },
+            }
             iced_core::mouse::Event::CursorMoved { position } => {
                 if !state.is_focused() {
                     return Vec::default();
@@ -140,10 +129,8 @@ impl<'a> TerminalView<'a> {
                     layout_position,
                     &mut commands,
                 );
-            },
-            iced_core::mouse::Event::ButtonReleased(
-                iced_core::mouse::Button::Left,
-            ) => {
+            }
+            iced_core::mouse::Event::ButtonReleased(iced_core::mouse::Button::Left) => {
                 if !state.is_focused() {
                     return Vec::default();
                 }
@@ -154,16 +141,11 @@ impl<'a> TerminalView<'a> {
                     &self.term.bindings,
                     &mut commands,
                 );
-            },
+            }
             iced::mouse::Event::WheelScrolled { delta } => {
-                Self::handle_wheel_scrolled(
-                    state,
-                    *delta,
-                    &self.term.font.measure,
-                    &mut commands,
-                );
-            },
-            _ => {},
+                Self::handle_wheel_scrolled(state, *delta, &self.term.font.measure, &mut commands);
+            }
+            _ => {}
         }
 
         commands
@@ -184,11 +166,7 @@ impl<'a> TerminalView<'a> {
                 true,
             )
         } else {
-            let current_click = Click::new(
-                cursor_position,
-                mouse::Button::Left,
-                state.last_click,
-            );
+            let current_click = Click::new(cursor_position, mouse::Button::Left, state.last_click);
             let selection_type = match current_click.kind() {
                 mouse::click::Kind::Single => SelectionType::Simple,
                 mouse::click::Kind::Double => SelectionType::Semantic,
@@ -288,7 +266,7 @@ impl<'a> TerminalView<'a> {
             ScrollDelta::Lines { y, .. } => {
                 let lines = y.signum() * y.abs().round();
                 commands.push(Command::Scroll(lines as i32));
-            },
+            }
             ScrollDelta::Pixels { y, .. } => {
                 state.scroll_pixels -= y;
                 let line_height = font_measure.height; // Assume this method exists and gives the height of a line
@@ -297,7 +275,7 @@ impl<'a> TerminalView<'a> {
                 if lines != 0.0 {
                     commands.push(Command::Scroll(lines as i32));
                 }
-            },
+            }
         }
     }
 
@@ -317,11 +295,8 @@ impl<'a> TerminalView<'a> {
                 } else {
                     LinkAction::Clear
                 };
-                return Some(Command::ProcessLink(
-                    action,
-                    state.mouse_position_on_grid,
-                ));
-            },
+                return Some(Command::ProcessLink(action, state.mouse_position_on_grid));
+            }
             iced::keyboard::Event::KeyPressed {
                 key,
                 modifiers,
@@ -343,17 +318,17 @@ impl<'a> TerminalView<'a> {
                             return Some(Command::Write(c.as_bytes().to_vec()));
                         }
                     }
-                },
+                }
                 Key::Named(code) => {
                     binding_action = self.term.bindings.get_action(
                         InputKind::KeyCode(*code),
                         *modifiers,
                         last_content.terminal_mode,
                     );
-                },
-                _ => {},
+                }
+                _ => {}
             },
-            _ => {},
+            _ => {}
         }
 
         match binding_action {
@@ -361,23 +336,23 @@ impl<'a> TerminalView<'a> {
                 let mut buf = [0, 0, 0, 0];
                 let str = c.encode_utf8(&mut buf);
                 return Some(Command::Write(str.as_bytes().to_vec()));
-            },
+            }
             BindingAction::Esc(seq) => {
                 return Some(Command::Write(seq.as_bytes().to_vec()));
-            },
+            }
             BindingAction::Paste => {
                 if let Some(data) = clipboard.read(ClipboardKind::Standard) {
                     let input: Vec<u8> = data.bytes().collect();
                     return Some(Command::Write(input));
                 }
-            },
+            }
             BindingAction::Copy => {
                 clipboard.write(
                     ClipboardKind::Standard,
                     self.term.backend.selectable_content(),
                 );
-            },
-            _ => {},
+            }
+            _ => {}
         };
 
         None
@@ -430,223 +405,172 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
         _style: &iced::advanced::renderer::Style,
         layout: iced::advanced::Layout,
         _cursor: Cursor,
-        viewport: &Rectangle,
+        _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<TerminalViewState>();
         let content = self.term.backend.renderable_content();
         let term_size = content.terminal_size;
-        let cell_width = term_size.cell_width as f32;
-        let cell_height = term_size.cell_height as f32;
+        let cell_width = term_size.cell_width;
+        let cell_height = term_size.cell_height;
+        if cell_width <= 0.0 || cell_height <= 0.0 {
+            return;
+        }
+
         let font_size = self.term.font.size;
-        let font_scale_factor = self.term.font.scale_factor;
-        let layout_offset_x = layout.position().x;
-        let layout_offset_y = layout.position().y;
+        let line_height = LineHeight::Relative(self.term.font.scale_factor);
+        let bounds = layout.bounds();
+        let origin = bounds.position();
+        let display_offset = content.grid.display_offset() as f32;
+        let focused = state.is_focused();
 
-        // PATCH (filament): iced_term upstream bakes the widget's *absolute*
-        // window position into every glyph and then replays the cached geometry
-        // with no translation. A cached `Frame` is clipped to its own origin
-        // (0,0)-(w,h), so this only renders correctly when the terminal sits at
-        // the window origin (every upstream example is full-window). When the
-        // terminal is embedded lower in a layout, the glyphs are baked below the
-        // clip and disappear. Fix: draw cells in *frame-local* coordinates and
-        // translate the geometry to the widget position — the canonical iced
-        // canvas pattern (`with_translation(bounds.position, draw_geometry)`).
-        log::debug!(
-            "iced_term::draw id={} layout_pos=({:.1},{:.1}) viewport=({:.1},{:.1} {:.1}x{:.1}) cell=({:.2}x{:.2}) cells={}",
-            self.term.id,
-            layout_offset_x,
-            layout_offset_y,
-            viewport.x,
-            viewport.y,
-            viewport.width,
-            viewport.height,
-            cell_width,
-            cell_height,
-            content.grid.display_iter().count(),
-        );
+        // The terminal background is painted by the widget itself (a solid quad
+        // under the grid), so the embedding container no longer needs an opaque
+        // shim and the surrounding window can stay translucent glass.
+        let default_bg = self
+            .term
+            .theme
+            .get_color(ansi::Color::Named(NamedColor::Background));
 
-        let geom = self.term.cache.draw(renderer, viewport.size(), |frame| {
-            // Precompute constants used in the inner loop
-            let display_offset = content.grid.display_offset() as f32;
-            let cell_size = Size::new(cell_width, cell_height);
-            let half_w = cell_width * 0.5;
-            let half_h = cell_height * 0.5;
-            // We use the background pallete color as a default
-            // because the widget global background color must be the same
-            let default_bg = self
-                .term
-                .theme
-                .get_color(ansi::Color::Named(NamedColor::Background));
+        let cell_rect = |col: f32, line: f32| Rectangle {
+            x: origin.x + col * cell_width,
+            y: origin.y + (line + display_offset) * cell_height,
+            width: cell_width,
+            height: cell_height,
+        };
 
-            let mut last_line: Option<i32> = None;
-            let mut bg_batch_rect = BackgroundRect::default();
+        // Draw at absolute layout coordinates, clipped to the widget bounds —
+        // the same native text/quad path the rest of the UI uses. There is no
+        // separate canvas-geometry layer to mis-position, get clipped away when
+        // embedded off-origin, or vanish over a transparent surface. Within a
+        // layer iced draws quads beneath text, so backgrounds/cursor land under
+        // the glyphs automatically.
+        renderer.with_layer(bounds, |renderer| {
+            renderer.fill_quad(
+                Quad {
+                    bounds,
+                    ..Quad::default()
+                },
+                default_bg,
+            );
 
             for indexed in content.grid.display_iter() {
-                // Compute per-cell geometry cheaply
-                let line = indexed.point.line.0;
-                let col = indexed.point.column.0 as f32;
+                let point = indexed.point;
+                let col = point.column.0 as f32;
+                let line = point.line.0 as f32;
+                let rect = cell_rect(col, line);
+                let flags = indexed.cell.flags;
 
-                // Resolve position point for this cell (frame-local; the whole
-                // geometry is translated to the widget position after drawing).
-                let x = col * cell_width;
-                let y = ((line as f32) + display_offset) * cell_height;
-                let cell_center_y = y + half_h;
-                let cell_center_x = x + half_w;
-
-                // Resolve colors for this cell
-                let mut fg = self.term.theme.get_color(indexed.fg);
+                // Resolve colors. Bold promotes the 8 normal ANSI colors to
+                // their bright variants (conventional "bold = bright"), a big
+                // part of making output read as vivid rather than muted.
+                let fg_ansi = if flags.intersects(cell::Flags::BOLD) {
+                    brighten(indexed.fg)
+                } else {
+                    indexed.fg
+                };
+                let mut fg = self.term.theme.get_color(fg_ansi);
                 let mut bg = self.term.theme.get_color(indexed.bg);
 
-                // If the new line was detected,
-                // need to flush pending background rect and init the new one
-                if last_line != Some(line) {
-                    if bg_batch_rect.can_flush() {
-                        let line = last_line.unwrap_or(line);
-                        frame.fill(
-                            &bg_batch_rect.build(line),
-                            bg_batch_rect.color,
-                        );
-                    }
-
-                    last_line = Some(line);
-                    bg_batch_rect = BackgroundRect::default()
-                        .with_cell_height(cell_height)
-                        .with_display_offset(display_offset)
-                        .with_layout_offset_y(0.0);
-                }
-
-                // Handle dim, inverse, and selected text
-                if indexed
-                    .cell
-                    .flags
-                    .intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD)
-                {
+                if flags.intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD) {
                     fg.a *= 0.7;
                 }
-                if indexed.cell.flags.contains(cell::Flags::INVERSE)
-                    || content
-                        .selectable_range
-                        .is_some_and(|r| r.contains(indexed.point))
-                {
+                let selected = content.selectable_range.is_some_and(|r| r.contains(point));
+                if flags.contains(cell::Flags::INVERSE) || selected {
                     std::mem::swap(&mut fg, &mut bg);
                 }
 
-                // Batch draw backgrounds: skip default background (container already paints it)
+                // Cell background (skip default; the backing quad covers it).
                 if bg != default_bg {
-                    if bg_batch_rect.can_extend(bg, x) {
-                        // Same color and contiguous: extend current run
-                        bg_batch_rect.extend(cell_width);
+                    renderer.fill_quad(
+                        Quad {
+                            bounds: rect,
+                            ..Quad::default()
+                        },
+                        bg,
+                    );
+                }
+
+                // Cursor: a solid block when focused (the glyph is re-drawn in
+                // the background color so it stays legible), a hollow outline
+                // when not.
+                let is_cursor = content.grid.cursor.point == point
+                    && content.terminal_mode.contains(TermMode::SHOW_CURSOR);
+                if is_cursor {
+                    let cursor_color = self.term.theme.get_color(content.cursor.fg);
+                    if focused {
+                        renderer.fill_quad(
+                            Quad {
+                                bounds: rect,
+                                ..Quad::default()
+                            },
+                            cursor_color,
+                        );
+                        fg = default_bg;
                     } else {
-                        // New colored run (or non-contiguous): flush previous run if any
-                        if bg_batch_rect.can_flush() {
-                            frame.fill(
-                                &bg_batch_rect.build(line),
-                                bg_batch_rect.color,
-                            );
-                        }
-
-                        // Start a new run but do not draw yet; wait for potential extensions
-                        bg_batch_rect = BackgroundRect::default()
-                            .with_cell_height(cell_height)
-                            .with_display_offset(display_offset)
-                            .with_layout_offset_y(0.0)
-                            .activate()
-                            .with_color(bg)
-                            .with_start_x(x)
-                            .with_width(cell_width);
+                        renderer.fill_quad(
+                            Quad {
+                                bounds: rect,
+                                border: Border {
+                                    color: cursor_color,
+                                    width: 1.0,
+                                    radius: 0.0.into(),
+                                },
+                                ..Quad::default()
+                            },
+                            Color::TRANSPARENT,
+                        );
                     }
-                } else if bg_batch_rect.can_flush() {
-                    // Background returns to default, flush current background rect and init the new one
-                    frame.fill(&bg_batch_rect.build(line), bg_batch_rect.color);
-
-                    bg_batch_rect = BackgroundRect::default()
-                        .with_cell_height(cell_height)
-                        .with_display_offset(display_offset)
-                        .with_layout_offset_y(0.0);
                 }
 
-                // Draw hovered hyperlink underline (rare; keep per-cell for correctness)
-                if content.hovered_hyperlink.as_ref().is_some_and(|range| {
-                    range.contains(&indexed.point)
-                        && range.contains(&state.mouse_position_on_grid)
-                }) || indexed.cell.flags.contains(cell::Flags::UNDERLINE)
-                {
-                    let underline_height = y + cell_size.height;
-                    let underline = Path::line(
-                        Point::new(x, underline_height),
-                        Point::new(x + cell_size.width, underline_height),
-                    );
-                    frame.stroke(
-                        &underline,
-                        Stroke::default()
-                            .with_width(font_size * 0.15)
-                            .with_color(fg),
+                // Underline (cell attribute or a hovered ⌘-hyperlink).
+                let underline = flags.contains(cell::Flags::UNDERLINE)
+                    || content.hovered_hyperlink.as_ref().is_some_and(|range| {
+                        range.contains(&point) && range.contains(&state.mouse_position_on_grid)
+                    });
+                if underline {
+                    let thickness = (font_size * 0.08).max(1.0);
+                    renderer.fill_quad(
+                        Quad {
+                            bounds: Rectangle {
+                                x: rect.x,
+                                y: rect.y + rect.height - thickness,
+                                width: rect.width,
+                                height: thickness,
+                            },
+                            ..Quad::default()
+                        },
+                        fg,
                     );
                 }
 
-                // Handle cursor rendering
-                if content.grid.cursor.point == indexed.point
-                    && content.terminal_mode.contains(TermMode::SHOW_CURSOR)
-                {
-                    let cursor_color =
-                        self.term.theme.get_color(content.cursor.fg);
-                    let cursor_rect =
-                        Path::rectangle(Point::new(x, y), cell_size);
-                    frame.fill(&cursor_rect, cursor_color);
-                }
-
-                // Draw text
-                if indexed.c != ' ' && indexed.c != '\t' {
-                    if content.grid.cursor.point == indexed.point
-                        && content.terminal_mode.contains(TermMode::APP_CURSOR)
-                    {
-                        fg = bg;
-                    }
-                    // Resolve font style (bold/italic) from cell flags
+                // Glyph (centered in the cell; cell width is the font's true
+                // advance, so columns line up without squish).
+                let c = indexed.c;
+                if c != ' ' && c != '\t' {
                     let mut font = self.term.font.font_type;
-                    if indexed
-                        .cell
-                        .flags
-                        .intersects(cell::Flags::BOLD | cell::Flags::DIM_BOLD)
-                    {
+                    if flags.intersects(cell::Flags::BOLD | cell::Flags::DIM_BOLD) {
                         font.weight = FontWeight::Bold;
                     }
-                    if indexed.cell.flags.contains(cell::Flags::ITALIC) {
+                    if flags.contains(cell::Flags::ITALIC) {
                         font.style = FontStyle::Italic;
                     }
-                    let text = Text {
-                        content: indexed.cell.c.to_string(),
-                        position: Point::new(cell_center_x, cell_center_y),
-                        font,
+                    let text = CoreText {
+                        content: c.to_string(),
+                        bounds: Size::new(cell_width, cell_height),
                         size: iced_core::Pixels(font_size),
-                        color: fg,
-                        align_x: Alignment::Center,
+                        line_height,
+                        font,
+                        align_x: TextAlignment::Center,
                         align_y: Vertical::Center,
                         shaping: Shaping::Advanced,
-                        line_height: LineHeight::Relative(font_scale_factor),
-                        ..Default::default()
+                        wrapping: Wrapping::None,
                     };
-                    frame.fill_text(text);
+                    let position =
+                        Point::new(rect.x + cell_width / 2.0, rect.y + cell_height / 2.0);
+                    renderer.fill_text(text, position, fg, bounds);
                 }
             }
-
-            // Flush any remaining background run at the end
-            if bg_batch_rect.can_flush() {
-                frame.fill(
-                    &bg_batch_rect.build(last_line.unwrap_or(0)),
-                    bg_batch_rect.color,
-                );
-            }
         });
-
-        use iced::advanced::graphics::geometry::Renderer as _;
-        use iced_graphics::core::Renderer as _;
-        renderer.with_translation(
-            iced::Vector::new(layout_offset_x, layout_offset_y),
-            |renderer| {
-                renderer.draw_geometry(geom);
-            },
-        );
     }
 
     fn update(
@@ -667,13 +591,12 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
         self.handle_focus(event, state, is_cursor_in_layout);
 
         let commands = match event {
-            iced::Event::Mouse(mouse_event) if is_cursor_in_layout => self
-                .handle_mouse_event(
-                    state,
-                    layout.position(),
-                    cursor.position().unwrap(),
-                    mouse_event,
-                ),
+            iced::Event::Mouse(mouse_event) if is_cursor_in_layout => self.handle_mouse_event(
+                state,
+                layout.position(),
+                cursor.position().unwrap(),
+                mouse_event,
+            ),
             iced::Event::Keyboard(keyboard_event) => {
                 if !state.is_focused() {
                     return;
@@ -682,7 +605,7 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
                 self.handle_keyboard_event(state, clipboard, keyboard_event)
                     .into_iter()
                     .collect()
-            },
+            }
             _ => Vec::new(),
         };
 
@@ -705,10 +628,8 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
     ) -> iced_core::mouse::Interaction {
         let state = tree.state.downcast_ref::<TerminalViewState>();
         let mut cursor_mode = iced_core::mouse::Interaction::Idle;
-        let terminal_mode =
-            self.term.backend.renderable_content().terminal_mode;
-        if self.is_cursor_in_layout(cursor, layout)
-            && !terminal_mode.contains(TermMode::SGR_MOUSE)
+        let terminal_mode = self.term.backend.renderable_content().terminal_mode;
+        if self.is_cursor_in_layout(cursor, layout) && !terminal_mode.contains(TermMode::SGR_MOUSE)
         {
             cursor_mode = iced_core::mouse::Interaction::Text;
         }
@@ -772,74 +693,25 @@ impl operation::Focusable for TerminalViewState {
     }
 }
 
-#[derive(Default)]
-struct BackgroundRect {
-    display_offset: f32,
-    cell_height: f32,
-    layout_offset_y: f32,
-    is_active: bool,
-    color: Color,
-    start_x: f32,
-    width: f32,
-}
-
-impl BackgroundRect {
-    fn with_display_offset(mut self, value: f32) -> Self {
-        self.display_offset = value;
-        self
-    }
-
-    fn with_cell_height(mut self, value: f32) -> Self {
-        self.cell_height = value;
-        self
-    }
-
-    fn with_layout_offset_y(mut self, value: f32) -> Self {
-        self.layout_offset_y = value;
-        self
-    }
-
-    fn with_width(mut self, value: f32) -> Self {
-        self.width = value;
-        self
-    }
-
-    fn with_start_x(mut self, value: f32) -> Self {
-        self.start_x = value;
-        self
-    }
-
-    fn with_color(mut self, value: Color) -> Self {
-        self.color = value;
-        self
-    }
-
-    fn activate(mut self) -> Self {
-        self.is_active = true;
-        self
-    }
-
-    fn build(&self, line: i32) -> Path {
-        let flush_y = self.layout_offset_y
-            + ((line as f32 + self.display_offset) * self.cell_height);
-        Path::rectangle(
-            Point::new(self.start_x, flush_y),
-            Size::new(self.width, self.cell_height),
-        )
-    }
-
-    fn can_flush(&self) -> bool {
-        self.is_active && self.width > 0.0
-    }
-
-    fn can_extend(&self, bg: Color, x: f32) -> bool {
-        self.is_active
-            && bg == self.color
-            && (self.start_x + self.width - x).abs() < f32::EPSILON
-    }
-
-    fn extend(&mut self, value: f32) {
-        self.width += value;
+/// Promote the 8 normal ANSI colors to their bright counterparts (used for bold
+/// text). Bright/dim/foreground named colors, the 256-color cube, and truecolor
+/// are returned unchanged.
+fn brighten(color: ansi::Color) -> ansi::Color {
+    use NamedColor::*;
+    match color {
+        ansi::Color::Named(name) => ansi::Color::Named(match name {
+            Black => BrightBlack,
+            Red => BrightRed,
+            Green => BrightGreen,
+            Yellow => BrightYellow,
+            Blue => BrightBlue,
+            Magenta => BrightMagenta,
+            Cyan => BrightCyan,
+            White => BrightWhite,
+            other => other,
+        }),
+        ansi::Color::Indexed(i) if i < 8 => ansi::Color::Indexed(i + 8),
+        other => other,
     }
 }
 
@@ -1003,18 +875,17 @@ mod tests {
             );
 
             assert_eq!(commands.len(), 1);
-            assert!(matches!(
-                commands[0],
-                Command::SelectUpdate((95.0, 145.0))
-            ));
+            assert!(matches!(commands[0], Command::SelectUpdate((95.0, 145.0))));
         }
 
         #[test]
         fn generates_drag_update_command_when_dragged_in_mouse_motion_mode() {
             let mut state = TerminalViewState::new();
             state.is_dragged = true; // Simulate an ongoing drag operation
-            let mut terminal_content = RenderableContent::default();
-            terminal_content.terminal_mode = TermMode::MOUSE_MOTION;
+            let terminal_content = RenderableContent {
+                terminal_mode: TermMode::MOUSE_MOTION,
+                ..Default::default()
+            };
             let layout_position = Point { x: 5.0, y: 5.0 };
             let cursor_position = Point { x: 100.0, y: 150.0 };
             let mut commands = Vec::new();
@@ -1044,13 +915,14 @@ mod tests {
         }
 
         #[test]
-        fn generates_drag_update_command_when_dragged_in_srg_mode_with_key_mods(
-        ) {
+        fn generates_drag_update_command_when_dragged_in_srg_mode_with_key_mods() {
             let mut state = TerminalViewState::new();
             state.keyboard_modifiers = Modifiers::SHIFT;
             state.is_dragged = true; // Simulate an ongoing drag operation
-            let mut terminal_content = RenderableContent::default();
-            terminal_content.terminal_mode = TermMode::SGR_MOUSE;
+            let terminal_content = RenderableContent {
+                terminal_mode: TermMode::SGR_MOUSE,
+                ..Default::default()
+            };
             let layout_position = Point { x: 5.0, y: 5.0 };
             let cursor_position = Point { x: 100.0, y: 150.0 };
             let mut commands = Vec::new();
@@ -1064,10 +936,7 @@ mod tests {
             );
 
             assert_eq!(commands.len(), 1);
-            assert!(matches!(
-                commands[0],
-                Command::SelectUpdate((95.0, 145.0))
-            ));
+            assert!(matches!(commands[0], Command::SelectUpdate((95.0, 145.0))));
         }
 
         #[test]
@@ -1075,8 +944,10 @@ mod tests {
             let mut state = TerminalViewState::new();
             state.keyboard_modifiers = Modifiers::COMMAND;
             state.is_dragged = true; // Simulate an ongoing drag operation
-            let mut terminal_content = RenderableContent::default();
-            terminal_content.terminal_mode = TermMode::SGR_MOUSE;
+            let terminal_content = RenderableContent {
+                terminal_mode: TermMode::SGR_MOUSE,
+                ..Default::default()
+            };
             let layout_position = Point { x: 5.0, y: 5.0 };
             let cursor_position = Point { x: 100.0, y: 150.0 };
             let mut commands = Vec::new();
@@ -1090,10 +961,7 @@ mod tests {
             );
 
             assert_eq!(commands.len(), 2);
-            assert!(matches!(
-                commands[0],
-                Command::SelectUpdate((95.0, 145.0))
-            ));
+            assert!(matches!(commands[0], Command::SelectUpdate((95.0, 145.0))));
             assert!(matches!(
                 commands[1],
                 Command::ProcessLink(

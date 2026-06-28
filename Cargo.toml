@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/filament-core", "crates/filament"]
+members = ["crates/filament-core", "crates/filament", "crates/filament-terminal"]
 
 [workspace.package]
 edition = "2021"
@@ -20,10 +20,10 @@ tempfile = "3"
 
 # UI / binary
 filament-core = { path = "crates/filament-core" }
+filament-terminal = { path = "crates/filament-terminal" }
 log = { version = "0.4", features = ["std"] }
 iced = { version = "0.14", features = ["markdown", "highlighter"] }
 iced_highlighter = "0.14"
-iced_term = "0.8"
 rfd = "0.15"
 nucleo = "0.5"
 notify = "8"
@@ -32,10 +32,3 @@ notify-debouncer-full = "0.7"
 [profile.release]
 lto = "thin"
 strip = true
-
-# Local fork of iced_term 0.8 with a fix for the embedded (non-origin) terminal:
-# upstream bakes absolute window coords into the cached canvas geometry and
-# replays it untranslated, so glyphs are clipped away when the terminal isn't at
-# the window origin. The vendored copy draws frame-local and uses with_translation.
-[patch.crates-io]
-iced_term = { path = "vendor/iced_term" }

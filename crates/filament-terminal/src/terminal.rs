@@ -7,7 +7,6 @@ use crate::theme::{ColorPalette, Theme};
 use crate::AlacrittyEvent;
 use iced::futures::stream::BoxStream;
 use iced::futures::{SinkExt, StreamExt};
-use iced::widget::canvas::Cache;
 use iced::Subscription;
 use std::hash::{Hash, Hasher};
 use std::io::Result;
@@ -33,7 +32,6 @@ pub struct Terminal {
     widget_id: iced::widget::Id,
     pub(crate) font: TermFont,
     pub(crate) theme: Theme,
-    pub(crate) cache: Cache,
     pub(crate) bindings: BindingsLayout,
     pub(crate) backend: backend::Backend,
     backend_event_rx: Arc<Mutex<Receiver<AlacrittyEvent>>>,
@@ -51,12 +49,7 @@ impl Terminal {
             font,
             theme,
             bindings: BindingsLayout::default(),
-            cache: Cache::default(),
-            backend: backend::Backend::new(
-                id,
-                backend_event_tx,
-                settings.backend,
-            )?,
+            backend: backend::Backend::new(id, backend_event_tx, settings.backend)?,
             backend_event_rx: Arc::new(Mutex::new(backend_event_rx)),
         })
     }
@@ -80,36 +73,31 @@ impl Terminal {
         match cmd {
             Command::ChangeTheme(color_pallete) => {
                 self.theme = Theme::new(ThemeSettings::new(color_pallete));
-            },
+            }
             Command::ChangeFont(font_settings) => {
                 self.font = TermFont::new(font_settings);
-            },
+            }
             Command::AddBindings(bindings) => {
                 self.bindings.add_bindings(bindings);
-            },
+            }
             Command::ProxyToBackend(cmd) => {
                 action = self.backend.handle(cmd);
-            },
+            }
         };
 
-        self.sync_and_redraw();
+        self.sync();
         action
     }
 
-    fn sync_and_redraw(&mut self) {
+    fn sync(&mut self) {
         self.sync_font();
         self.backend.sync();
-        self.redraw();
     }
 
     fn sync_font(&mut self) {
         self.font.sync();
         self.backend
             .handle(backend::Command::Resize(None, Some(self.font.measure)));
-    }
-
-    fn redraw(&mut self) {
-        self.cache.clear();
     }
 }
 
@@ -125,33 +113,38 @@ impl Hash for TerminalSubscriptionData {
     }
 }
 
-fn terminal_subscription_stream(
-    data: &TerminalSubscriptionData,
-) -> BoxStream<'static, Event> {
+fn terminal_subscription_stream(data: &TerminalSubscriptionData) -> BoxStream<'static, Event> {
     let id = data.id;
     let event_receiver = data.event_receiver.clone();
     iced::stream::channel(1000, async move |mut output| {
-        let mut shutdown = false;
         loop {
             let mut event_receiver = event_receiver.lock().await;
             match event_receiver.recv().await {
                 Some(event) => {
-                    if let AlacrittyEvent::Exit = event {
-                        shutdown = true
-                    };
-
-                    output
-                        .send(Event::BackendCall(id, backend::Command::ProcessAlacrittyEvent(event)))
+                    let is_exit = matches!(event, AlacrittyEvent::Exit);
+                    if output
+                        .send(Event::BackendCall(
+                            id,
+                            backend::Command::ProcessAlacrittyEvent(event),
+                        ))
                         .await
-                        .unwrap_or_else(|_| {
-                            panic!("iced_term stream {}: sending BackendEventReceived event is failed", id)
-                        });
-                },
-                None => {
-                    if !shutdown {
-                        panic!("iced_term stream {}: terminal event channel closed unexpected", id);
+                        .is_err()
+                    {
+                        // The UI dropped the receiver (app shutting down).
+                        log::debug!("terminal {id}: event sink closed; stopping stream");
+                        break;
                     }
-                },
+                    // The PTY exited; the grid's Exit event has been delivered,
+                    // so we can stop pumping. The app closes the tab in response.
+                    if is_exit {
+                        break;
+                    }
+                }
+                None => {
+                    // Backend dropped its event sender (terminal gone).
+                    log::debug!("terminal {id}: event channel closed; stopping stream");
+                    break;
+                }
             }
         }
     })

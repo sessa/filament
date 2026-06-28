@@ -1,17 +1,17 @@
-//! Settings builders for the embedded terminal (`iced_term`).
+//! Settings builders for the embedded terminal (`filament-terminal`).
 //!
-//! Ghostty itself can't be embedded in an Iced/wgpu app yet (its renderer isn't
-//! released), so the integrated terminal is `iced_term`, backed by
-//! `alacritty_terminal` + `portable-pty`. These helpers produce the backend
-//! settings for either a plain shell or a Claude Code session, themed to match
-//! the app (warm palette, JetBrains Mono) and honoring the user's font size.
+//! The integrated terminal is our own [`filament_terminal`] widget, backed by
+//! `alacritty_terminal` + `portable-pty` and rendered through iced's native
+//! text/quad path. These helpers produce the backend settings for either a plain
+//! shell or a Claude Code session, themed to match the app (vivid palette,
+//! JetBrains Mono) and honoring the user's font size.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use filament_terminal::settings::{BackendSettings, FontSettings, Settings, ThemeSettings};
+use filament_terminal::ColorPalette;
 use iced::Font;
-use iced_term::settings::{BackendSettings, FontSettings, Settings, ThemeSettings};
-use iced_term::ColorPalette;
 
 /// How the terminal should be launched.
 #[derive(Debug, Clone, Copy)]
@@ -184,38 +184,42 @@ fn default_shell() -> String {
     }
 }
 
-/// A warm terminal palette to match the app, in dark or light.
+/// The terminal palette: a warm off-white-on-near-black ground (to match the
+/// app), but with **saturated, vivid** ANSI accent colors so program output —
+/// `ls --color`, TUIs, the Claude UI — reads as colorful rather than washed out.
+/// The earlier palette desaturated every hue and made everything look muted;
+/// here the warm identity lives only in the foreground/background.
 fn palette(dark: bool) -> ColorPalette {
     let s = |h: &str| h.to_string();
     if dark {
         ColorPalette {
             foreground: s("#ECEAE3"),
             background: s("#1B1A18"),
-            black: s("#1B1A18"),
-            red: s("#E5675A"),
-            green: s("#7FB069"),
-            yellow: s("#E0AF68"),
-            blue: s("#6F9BE0"),
-            magenta: s("#B18AE0"),
-            cyan: s("#5FB0B0"),
-            white: s("#C8C4B8"),
-            bright_black: s("#5A564E"),
-            bright_red: s("#E5675A"),
-            bright_green: s("#8FBE78"),
-            bright_yellow: s("#E8BE7A"),
-            bright_blue: s("#84ACED"),
-            bright_magenta: s("#C29BEA"),
-            bright_cyan: s("#74C2C2"),
-            bright_white: s("#ECEAE3"),
-            bright_foreground: Some(s("#ECEAE3")),
+            black: s("#2B2824"),
+            red: s("#F4564A"),
+            green: s("#8FD46A"),
+            yellow: s("#F2C14E"),
+            blue: s("#6FA8FF"),
+            magenta: s("#CB8CF0"),
+            cyan: s("#4FD0D0"),
+            white: s("#D8D4C8"),
+            bright_black: s("#6E6A60"),
+            bright_red: s("#FF7468"),
+            bright_green: s("#B0E284"),
+            bright_yellow: s("#FFD56B"),
+            bright_blue: s("#8FBEFF"),
+            bright_magenta: s("#DCA6F7"),
+            bright_cyan: s("#74E6E6"),
+            bright_white: s("#FBFAF6"),
+            bright_foreground: Some(s("#FBFAF6")),
             dim_foreground: s("#9A958A"),
             dim_black: s("#1B1A18"),
-            dim_red: s("#B5524A"),
-            dim_green: s("#658C54"),
-            dim_yellow: s("#B58C53"),
-            dim_blue: s("#587CB3"),
-            dim_magenta: s("#8D6EB3"),
-            dim_cyan: s("#4C8C8C"),
+            dim_red: s("#AB3C34"),
+            dim_green: s("#64944A"),
+            dim_yellow: s("#A98736"),
+            dim_blue: s("#4D75B3"),
+            dim_magenta: s("#8E62A8"),
+            dim_cyan: s("#379090"),
             dim_white: s("#9A958A"),
         }
     } else {
@@ -223,30 +227,30 @@ fn palette(dark: bool) -> ColorPalette {
             foreground: s("#2B2A27"),
             background: s("#FBFAF6"),
             black: s("#2B2A27"),
-            red: s("#C0453B"),
-            green: s("#4E8C5A"),
-            yellow: s("#B5852F"),
-            blue: s("#3D6CB8"),
-            magenta: s("#7E5DB0"),
-            cyan: s("#3C8787"),
+            red: s("#D5392E"),
+            green: s("#3E9B4F"),
+            yellow: s("#C2860F"),
+            blue: s("#1E6FE0"),
+            magenta: s("#8B45C9"),
+            cyan: s("#1C8C8C"),
             white: s("#6B675E"),
             bright_black: s("#8A857B"),
-            bright_red: s("#C0453B"),
-            bright_green: s("#4E8C5A"),
-            bright_yellow: s("#B5852F"),
-            bright_blue: s("#3D6CB8"),
-            bright_magenta: s("#7E5DB0"),
-            bright_cyan: s("#3C8787"),
+            bright_red: s("#E84C40"),
+            bright_green: s("#49B25C"),
+            bright_yellow: s("#D89A1C"),
+            bright_blue: s("#2F82F2"),
+            bright_magenta: s("#9C55DA"),
+            bright_cyan: s("#23A0A0"),
             bright_white: s("#2B2A27"),
-            bright_foreground: Some(s("#2B2A27")),
+            bright_foreground: Some(s("#1C1B19")),
             dim_foreground: s("#6B675E"),
             dim_black: s("#2B2A27"),
-            dim_red: s("#A53C33"),
-            dim_green: s("#42764C"),
-            dim_yellow: s("#9A7128"),
-            dim_blue: s("#345C9C"),
-            dim_magenta: s("#6B4F96"),
-            dim_cyan: s("#337373"),
+            dim_red: s("#A82C23"),
+            dim_green: s("#2F7A3D"),
+            dim_yellow: s("#9A6A0C"),
+            dim_blue: s("#1857B3"),
+            dim_magenta: s("#6E37A0"),
+            dim_cyan: s("#167070"),
             dim_white: s("#6B675E"),
         }
     }

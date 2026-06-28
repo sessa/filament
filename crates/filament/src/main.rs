@@ -73,13 +73,12 @@ fn window_settings() -> iced::window::Settings {
     let settings = iced::window::Settings {
         size: iced::Size::new(1240.0, 820.0),
         min_size: Some(iced::Size::new(880.0, 580.0)),
-        // DIAGNOSTIC (blank-terminal): the embedded iced_term renders via iced's
-        // canvas-geometry path while the rest of the UI uses the normal text
-        // path. Run an opaque window temporarily to isolate whether the
-        // transparent/PostMultiplied surface is eating the terminal's geometry
-        // layer. Restore to `true` once the cause is confirmed.
-        transparent: false,
-        blur: false,
+        // The glass UI: a transparent window with OS backdrop blur. The terminal
+        // now renders through iced's native text/quad path and paints its own
+        // opaque backing quad, so it composites cleanly here (the old
+        // canvas-geometry layer was what forced this off).
+        transparent: true,
+        blur: true,
         ..Default::default()
     };
 

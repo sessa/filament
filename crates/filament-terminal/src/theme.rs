@@ -124,8 +124,7 @@ impl Theme {
                         _ => &self.palette.background,
                     };
 
-                    return hex_to_color(color)
-                        .unwrap_or_else(|_| panic!("invalid color {}", color));
+                    return resolve_hex(color);
                 }
 
                 // Other colors
@@ -133,7 +132,7 @@ impl Theme {
                     Some(color) => *color,
                     None => Color::from_rgb8(0, 0, 0),
                 }
-            },
+            }
             ansi::Color::Named(c) => {
                 let color = match c {
                     NamedColor::Foreground => &self.palette.foreground,
@@ -156,11 +155,9 @@ impl Theme {
                     NamedColor::BrightMagenta => &self.palette.bright_magenta,
                     NamedColor::BrightCyan => &self.palette.bright_cyan,
                     NamedColor::BrightWhite => &self.palette.bright_white,
-                    NamedColor::BrightForeground => {
-                        match &self.palette.bright_foreground {
-                            Some(color) => color,
-                            None => &self.palette.foreground,
-                        }
+                    NamedColor::BrightForeground => match &self.palette.bright_foreground {
+                        Some(color) => color,
+                        None => &self.palette.foreground,
                     },
                     // Dim terminal colors
                     NamedColor::DimForeground => &self.palette.dim_foreground,
@@ -175,11 +172,20 @@ impl Theme {
                     _ => &self.palette.background,
                 };
 
-                hex_to_color(color)
-                    .unwrap_or_else(|_| panic!("invalid color {}", color))
-            },
+                resolve_hex(color)
+            }
         }
     }
+}
+
+/// Parse a palette hex string, falling back to a neutral gray instead of
+/// panicking. Palettes are hard-coded valid hex, so this only guards against a
+/// future bad entry — better a wrong color than a crashed UI.
+fn resolve_hex(hex: &str) -> Color {
+    hex_to_color(hex).unwrap_or_else(|_| {
+        log::warn!("invalid terminal palette color {hex:?}; using gray");
+        Color::from_rgb8(0x80, 0x80, 0x80)
+    })
 }
 
 fn build_ansi256_colors() -> HashMap<u8, Color> {
@@ -224,16 +230,7 @@ fn hex_to_color(hex: &str) -> anyhow::Result<Color> {
 impl TerminalStyle for Theme {
     fn container_style(&self) -> container::Style {
         container::Style {
-            background: Some(
-                hex_to_color(&self.palette.background)
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "invalid background color {}",
-                            self.palette.background
-                        )
-                    })
-                    .into(),
-            ),
+            background: Some(resolve_hex(&self.palette.background).into()),
             ..container::Style::default()
         }
     }

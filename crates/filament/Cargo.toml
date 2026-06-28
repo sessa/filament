@@ -14,9 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 filament-core = { workspace = true }
+filament-terminal = { workspace = true }
 log = { workspace = true }
 iced = { workspace = true }
-iced_term = { workspace = true }
 rfd = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
