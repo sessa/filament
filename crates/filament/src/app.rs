@@ -116,6 +116,9 @@ pub enum Message {
 
     // background / ipc
     PollTick,
+    // Constructed only by the Unix-socket IPC server (`ipc_server`, `#[cfg(unix)]`);
+    // on Windows the variant is matched but never built.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Ipc(ipc::Signal),
     DismissNotice,
 

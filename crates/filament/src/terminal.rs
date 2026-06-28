@@ -89,6 +89,8 @@ fn settings(program: String, args: Vec<String>, cwd: Option<PathBuf>, opts: Term
 /// bare launchd default and excludes Homebrew / npm / Cargo bin dirs — the cause
 /// of "Failed to spawn command 'claude': No such file or directory".
 fn child_env() -> HashMap<String, String> {
+    // On non-unix the only mutation below is `cfg`'d out, leaving `mut` unused.
+    #[allow(unused_mut)]
     let mut env = HashMap::new();
     #[cfg(unix)]
     env.insert("PATH".to_string(), augmented_path());
